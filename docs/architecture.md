@@ -50,7 +50,7 @@ src/
   platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts  wechat.ts  douyin.ts  tt.d.ts
   entry/     web.ts  wechat.ts  douyin.ts
 test/        fake-platform.ts ✓、core 单测、game 层在假平台上的测试、Playwright 冒烟测试
-tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  build.mjs  check-size.mjs  levels-preview.mjs
+tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs  check-size.mjs
 platforms/   wechat/ 和 douyin/ 的 game.json、project.config.json 模板
 docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 drafts/      上一版 JS 草稿，只作参考，1.5 完成后删除

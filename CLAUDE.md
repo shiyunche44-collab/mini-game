@@ -21,6 +21,7 @@
 | `npm run check:arch` | 只跑架构检查 |
 | `npm run typecheck` | 只跑分层类型检查 |
 | `npm test` | 只跑单元测试 |
+| `npm run levels:preview` | 在命令行打印前 10 关的答案网格和物品清单；`-- 30` 看前 30 关，`-- 11-20` 看第 11～20 关 |
 
 ## 工作方式
 
