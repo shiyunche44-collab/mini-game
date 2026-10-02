@@ -77,7 +77,7 @@
 - 4.2 提醒：微信、抖音没有 DOM，Web 这个弹层不能直接用。"没填广告位 id 时退回模拟广告"可以用 `wx.showModal` / `tt.showModal` 做一个同样规则（看完才给、可以提前关）的确认框，到时候再定。
 - 3.5 已就绪的部分：`npm run smoke`（`tools/smoke.mjs`）在 Chromium 里把 Web 版玩一遍：页面能打开、手机触摸和鼠标拖动、刷新后接着玩、提示和跳关的模拟广告（提前关闭不给）、通关第 1 关出现登机牌、转屏刷新。它需要浏览器，所以不在 `npm run check` 里，CI 里单独一个 `smoke` 任务跑。发布：`.github/workflows/pages.yml` + `tools/publish-pages.mjs`，每次推送 `dev` 先过 `npm run check`，再把产物推到 `gh-pages` 分支。详细步骤、要看什么、怎么反馈见 [playtest.md](playtest.md)。
 - 3.5 为手机试玩做的两处 Web 改动：`platform/web.ts` 读真实的安全区（`env(safe-area-inset-*)`），不然 iPhone 上行李牌会被刘海盖住；`entry/web.ts` 在宽度变化（转屏）时刷新页面，高度变化（地址栏收起）不刷新。安全区在真机上才能验证，自动测试测不到。
-- **3.5 还没有标 ✅**：它的验收是用户试玩前 10 关并给出结论。需要用户做的：在仓库设置里启用 Pages（私有仓库要付费套餐，见 playtest.md）。
+- **3.5 还没有标 ✅**：它的验收是用户试玩前 10 关并给出结论。需要用户做的：在仓库设置里启用 Pages（仓库已改成公开；设置步骤见 playtest.md）。
 
 
 ## 阶段 4：微信和抖音同时适配

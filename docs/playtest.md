@@ -8,8 +8,8 @@
 
 ## 第一次要做的设置（需要仓库管理员）
 
-1. **看一下仓库的套餐和可见性。** 这个仓库现在是**私有**的。GitHub Pages 在私有仓库上需要付费套餐（Pro、Team、Enterprise），免费账号用不了；免费账号要么把仓库改成公开，要么升级。另外**发布出来的页面任何人拿到链接都能打开**，没有登录保护（Enterprise Cloud 才有访问控制）。页面里只有压缩过的游戏脚本，源码和文档还在私有仓库里。
-2. 仓库 **Settings → Pages → Build and deployment**，Source 选 **Deploy from a branch**，Branch 选 **gh-pages**、目录选 **/ (root)**，保存。`gh-pages` 分支要等第一次发布跑完才有，所以先让 `dev` 有一次推送，等 Actions 里的 `pages` 工作流变绿，再来设。
+1. **仓库要是公开的**（已经改好了）。原来是私有的，GitHub Pages 在私有仓库上需要付费套餐（Pro、Team、Enterprise），免费账号用不了。改成公开意味着**源码、文档、提交历史任何人都能看到**，发布出来的页面也任何人拿到链接都能打开，没有登录保护。
+2. 仓库 **Settings → Pages → Build and deployment**，Source 选 **Deploy from a branch**，Branch 选 **gh-pages**、目录选 **/ (root)**，保存。`gh-pages` 分支要等第一次发布跑完才有，所以先让 `dev` 有一次推送，等 Actions 里的 `pages` 工作流变绿，再来设（现在已经有了）。
 3. 等一两分钟，用手机打开：**https://shiyunche44-collab.github.io/mini-game/**。打开 `/version.txt` 能看到现在是哪一版（提交的前 7 位和时间）。
 
 想让我在云环境里也能打开这个链接来验证，需要在环境设置里把 `shiyunche44-collab.github.io` 加进允许的域名（Network access → Custom → Allowed domains）。不加也不影响试玩。
