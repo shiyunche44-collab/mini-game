@@ -8,7 +8,7 @@
 // 网格画的是生成器给的答案，玩家不一定只有这一种摆法。
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { GENERATOR_VERSION, generateLevel, levelConfig } from '../src/core/levels.ts';
+import { GENERATOR_VERSION, generateLevel } from '../src/core/levels.ts';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const BLOCKED = '#';
@@ -80,7 +80,7 @@ export function renderLevel(level, seen = new Set()) {
 
   const out = [
     `第 ${level.n} 关  ${level.dest.code} ${level.dest.city} → ${level.next.code} ${level.next.city}`,
-    `箱子 ${cols}×${rows}，拉杆槽 ${level.blocked.length} 个，${level.pieces.length} 件物品，${levelConfig(level.n).rotate ? '可以旋转' : '不能旋转'}`,
+    `箱子 ${cols}×${rows}，拉杆槽 ${level.blocked.length} 个，${level.pieces.length} 件物品，${level.rotate ? '可以旋转' : '不能旋转'}`,
   ];
   if (level.tip) out.push(`教学提示：${level.tip}`);
 

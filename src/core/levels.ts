@@ -127,6 +127,8 @@ export interface Level {
   readonly rows: number;
   /** 拉杆槽所在的格子，下标 = 行 * cols + 列 */
   readonly blocked: readonly number[];
+  /** 玩家能不能旋转物品。false 时物品的朝向固定，托盘里一开始就是答案的朝向 */
+  readonly rotate: boolean;
   /** 托盘里物品的顺序（已打乱） */
   readonly pieces: readonly Piece[];
   readonly tip: string | null;
@@ -164,6 +166,7 @@ export function generateLevel(n: number): Level {
       cols: cfg.cols,
       rows: cfg.rows,
       blocked: result.blocked,
+      rotate: cfg.rotate,
       pieces,
       tip: cfg.tip,
       dest: DESTINATIONS[(n - 1) % DESTINATIONS.length] as Destination,

@@ -103,6 +103,7 @@ describe('generateLevel：每一关都正好铺满', () => {
       assert.ok(l.pieces.filter((p) => p.item.size === 1).length <= cfg.singles, where);
       assert.ok(l.pieces.every((p) => p.item.tier <= cfg.tier), where);
       assert.equal(l.tip, cfg.tip, where);
+      assert.equal(l.rotate, cfg.rotate, where);
       if (!cfg.rotate) assert.ok(l.pieces.every((p) => p.startOi === p.solution.oi), `${where}：不能旋转时一开始就是正确朝向`);
     }
   });

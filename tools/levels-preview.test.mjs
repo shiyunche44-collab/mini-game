@@ -19,7 +19,8 @@ const gridOf = (text) =>
 /** 手工拼一关：3×2 的箱子，两只登山靴拼成一个长方形 */
 function bootsLevel(pieces) {
   return {
-    n: 2, // 第 2 关可以旋转
+    n: 2,
+    rotate: true,
     cols: 3,
     rows: 2,
     blocked: [],
