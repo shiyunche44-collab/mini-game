@@ -163,6 +163,14 @@ export interface Platform {
 
   onPointer(handlers: PointerHandlers): void;
 
+  /**
+   * 下一帧回调，只触发一次。参数是单调递增的毫秒数，只用来算帧间隔，不能存档。
+   * 没有取消接口：想停下的一方自己设标志，回调到点后直接返回（ADR 0004）。
+   */
+  requestFrame(cb: (frameTimeMs: number) => void): void;
+  /** 墙上时钟（epoch 毫秒）。要存档、要跨次启动比较的时间用它；算动画别用，它可能被用户改动。 */
+  now(): number;
+
   readonly storage: {
     /** 没有这个 key，或者读出来的数据坏了，都返回 fallback。value 必须能被 JSON 序列化。 */
     get<T>(key: string, fallback: T): T;

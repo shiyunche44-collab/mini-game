@@ -107,6 +107,67 @@ describe('FakePlatform：触摸', () => {
   });
 });
 
+describe('FakePlatform：时间', () => {
+  const FRAME = FakePlatform.FRAME_MS;
+
+  it('时间不会自己走：不 advance，帧回调不会运行，now() 不变', () => {
+    const p = new FakePlatform();
+    let called = 0;
+    p.requestFrame(() => called++);
+    assert.equal(p.now(), FakePlatform.START_EPOCH_MS);
+    assert.equal(called, 0);
+    assert.equal(p.pendingFrames, 1);
+  });
+
+  it('advance 按帧点运行帧回调，参数是单调递增的帧时间；now() 精确地走过 ms', () => {
+    const p = new FakePlatform();
+    const times: number[] = [];
+    const again = (t: number): void => {
+      times.push(t);
+      p.requestFrame(again);
+    };
+    p.requestFrame(again);
+    p.advance(FRAME * 3 + 1);
+    assert.equal(times.length, 3);
+    assert.ok(Math.abs((times[0] ?? 0) - FRAME) < 1e-9);
+    assert.ok((times[1] ?? 0) > (times[0] ?? 0) && (times[2] ?? 0) > (times[1] ?? 0));
+    assert.equal(p.now(), FakePlatform.START_EPOCH_MS + FRAME * 3 + 1);
+  });
+
+  it('帧回调里再登记的回调，留到下一个帧点', () => {
+    const p = new FakePlatform();
+    const log: string[] = [];
+    p.requestFrame(() => {
+      log.push('a');
+      p.requestFrame(() => log.push('b'));
+    });
+    p.advance(FRAME);
+    assert.deepEqual(log, ['a']);
+    p.advance(FRAME);
+    assert.deepEqual(log, ['a', 'b']);
+  });
+
+  it('没有人登记时帧点照样流逝；一次 advance 和分几次 advance 结果一样', () => {
+    const run = (steps: number[]): number[] => {
+      const p = new FakePlatform();
+      const times: number[] = [];
+      p.advance(100);
+      const again = (t: number): void => {
+        times.push(t);
+        p.requestFrame(again);
+      };
+      p.requestFrame(again);
+      for (const s of steps) p.advance(s);
+      return times;
+    };
+    assert.deepEqual(run([200]), run([50, 50, 50, 50]));
+  });
+
+  it('advance 不接受负数', () => {
+    assert.throws(() => new FakePlatform().advance(-1), /负数/);
+  });
+});
+
 describe('FakePlatform：存储', () => {
   it('没有的 key 返回 fallback', () => {
     const p = new FakePlatform();

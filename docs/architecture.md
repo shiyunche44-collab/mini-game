@@ -45,7 +45,7 @@ entry → 平台实现 → platform/types.ts
 ```
 src/
   core/      rng.ts ✓  items.ts ✓  levels.ts ✓  game.ts ✓  progress.ts ✓
-  engine/    loop.ts  tween.ts  input.ts  draw.ts
+  engine/    loop.ts ✓  tween.ts ✓  input.ts ✓  draw.ts
   game/      PlayScene.ts  WinOverlay.ts  pieceView.ts  layout.ts  theme.ts  start.ts
   platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts  wechat.ts  douyin.ts  tt.d.ts
   entry/     web.ts  wechat.ts  douyin.ts
@@ -63,6 +63,7 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 |---|---|---|---|---|
 | 画布 | `ctx`、`screen` | `wx.createCanvas` | `tt.createCanvas` | `<canvas>` |
 | 触摸 | `onPointer` | `wx.onTouch*` | `tt.onTouch*` | pointer 事件 |
+| 下一帧、时钟 | `requestFrame`、`now` | `requestAnimationFrame`、`Date.now` | 同左（`tt`） | `requestAnimationFrame`、`Date.now` |
 | 存储 | `storage` | `wx.getStorageSync` 等 | `tt.getStorageSync` 等 | localStorage（包 try/catch） |
 | 激励视频、插屏 | `ads` | `wx.createRewardedVideoAd`、`createInterstitialAd` | `tt` 的同名接口 | 模拟弹层 |
 | 分享 | `share` | `wx.shareAppMessage` | `tt.shareAppMessage` | 无 |
@@ -75,6 +76,7 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 约定：
 
 - 坐标一律用 CSS 像素，原点在画布左上角。`ctx` 已按 dpr 缩放好。
+- `requestFrame` 的参数是单调递增的帧时间，只用来算 dt；要存档、跨次启动比较的时间用 `now()`（墙上时钟）。没有取消帧回调的接口，想停下的一方自己设标志（[ADR 0004](adr/0004-platform-frame-and-clock.md)）。
 - 广告接口不抛异常。激励视频只有完整看完才返回 `true`。
 - 存储的值必须能被 JSON 序列化。读不到或数据损坏时返回调用方给的默认值。
 
@@ -109,7 +111,7 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 | 逻辑层用了某个平台独有的东西 | 分层 tsconfig | `src/*/tsconfig.json`、`tools/typecheck.mjs` | 0.1 已完成 |
 | 用了小游戏不一定支持的 Canvas API | Canvas2D 子集和编译期兼容检查 | `src/platform/types.ts`、`canvas-compat.check.ts` | 0.2 已完成 |
 | 绕开分层：引用方向错误、`globalThis`、`declare const wx` | 架构检查和它的自测 | `tools/check-arch.mjs`、`check-arch.test.mjs` | 0.3 已完成 |
-| 游戏层悄悄依赖浏览器行为 | 假平台：记录绘制调用，模拟触摸、广告、前后台 | `test/fake-platform.ts` | 0.2 已完成；game 层测试从 3.1 开始 |
+| 游戏层悄悄依赖浏览器行为 | 假平台：记录绘制调用，模拟触摸、广告、前后台，手动推进时间 | `test/fake-platform.ts` | 0.2 已完成；game 层测试从 3.1 开始 |
 | 规则在多次会话之间被遗忘 | 本文档、ADR、`CLAUDE.md` | `docs/`、`CLAUDE.md` | 0.4 已完成 |
 | 范围慢慢膨胀 | 每个任务写明不做什么；计划外的想法记进 backlog | `docs/backlog.md` | 0.4 已完成 |
 | 没跑检查就推送 | GitHub Actions 跑 `npm run check` | `.github/workflows/check.yml` | 0.5 已完成 |
@@ -153,3 +155,4 @@ ADR 模板：
 | [0001](adr/0001-no-game-engine.md) | 不用游戏引擎：TypeScript + 原生 Canvas 2D |
 | [0002](adr/0002-layering.md) | 分层和依赖规则 |
 | [0003](adr/0003-deterministic-levels.md) | 关卡按关卡号确定地生成 |
+| [0004](adr/0004-platform-frame-and-clock.md) | Platform 增加下一帧回调和墙上时钟 |

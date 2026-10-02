@@ -3,6 +3,7 @@
 //
 // - ctx 会记录每一次绘制调用（和调用时的样式），测试可以检查"画了什么"
 // - touch 可以模拟按下、移动、抬起，以及点击、拖动
+// - 时间由测试手动推进（advance），帧回调和 now() 都跟着走
 // - 广告结果、前后台切换都由测试控制
 import type {
   Canvas2D,
@@ -260,6 +261,49 @@ export class FakePlatform implements Platform {
   private need(): PointerHandlers {
     if (!this.pointer) throw new Error('游戏还没有调用 onPointer，没有人在听触摸事件');
     return this.pointer;
+  }
+
+  // ---- 时间：完全由测试推进，不会自己走 ----
+  /** 假平台启动时的墙上时钟，固定值，让测试结果可重复 */
+  static readonly START_EPOCH_MS = 1_700_000_000_000;
+  /** 一帧的时长，和 60fps 的显示器一致 */
+  static readonly FRAME_MS = 1000 / 60;
+
+  private elapsed = 0;
+  private frameIndex = 0;
+  private frameCbs: ((frameTimeMs: number) => void)[] = [];
+
+  requestFrame(cb: (frameTimeMs: number) => void): void {
+    this.frameCbs.push(cb);
+  }
+
+  now(): number {
+    return FakePlatform.START_EPOCH_MS + this.elapsed;
+  }
+
+  /** 登记了、还没被推进到的帧回调个数，用来检查主循环停下后没有留下新的回调 */
+  get pendingFrames(): number {
+    return this.frameCbs.length;
+  }
+
+  /**
+   * 测试用：把时间推进 ms 毫秒。每经过一个帧点（FRAME_MS 的整数倍）就运行一次已登记的帧回调，
+   * 回调里再登记的回调留到下一个帧点。没有人登记时帧点照样流逝，和真实显示器一样。
+   * now() 总是精确地走过 ms。
+   */
+  advance(ms: number): void {
+    if (!(ms >= 0)) throw new Error('advance 的毫秒数不能是负数');
+    const end = this.elapsed + ms;
+    for (;;) {
+      const nextFrameAt = (this.frameIndex + 1) * FakePlatform.FRAME_MS;
+      if (nextFrameAt > end) break;
+      this.frameIndex++;
+      this.elapsed = nextFrameAt;
+      const cbs = this.frameCbs;
+      this.frameCbs = [];
+      for (const cb of cbs) cb(nextFrameAt);
+    }
+    this.elapsed = end;
   }
 
   // ---- 存储：存进去的东西会过一遍 JSON，和真实平台一样，取出来的是副本 ----
