@@ -14,3 +14,10 @@ const hints = Number(params.get('hints'));
 if (Number.isSafeInteger(hints) && hints >= 1) options.hints = hints;
 
 startGame(createWebPlatform(canvas), options);
+
+// 转屏或者改窗口宽度之后，布局要重新算：刷新页面。进度每一步都存了档，刷新只会丢手上正拿着的那一件。
+// 只看宽度：手机浏览器的地址栏收起、弹出时只有高度变，不能为这个刷新。
+const initialWidth = window.innerWidth;
+window.addEventListener('resize', () => {
+  if (window.innerWidth !== initialWidth) window.location.reload();
+});

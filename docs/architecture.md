@@ -50,7 +50,7 @@ src/
   platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts ✓  wechat.ts  douyin.ts  tt.d.ts
   entry/     web.ts ✓  wechat.ts  douyin.ts（每个入口配一份 tsconfig.<入口名>.json）
 test/        fake-platform.ts ✓、core 单测、game 层在假平台上的测试、Playwright 冒烟测试
-tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs ✓  check-size.mjs ✓
+tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs ✓  check-size.mjs ✓  smoke.mjs ✓  publish-pages.mjs ✓
 platforms/   web/index.html ✓；wechat/ 和 douyin/ 的 game.json、project.config.json 模板
 docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 ```
@@ -118,12 +118,13 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 | 没跑检查就推送 | GitHub Actions 跑 `npm run check` | `.github/workflows/check.yml` | 0.5 已完成 |
 | 关卡生成变慢 | 单测：每关生成不超过 50ms | core 单测 | 1.2 |
 | 包体膨胀 | 产物超过 300KB（压缩后的 JS）时报错 | `tools/check-size.mjs` | 2.2 已完成 |
+| 单测都过了，页面在真浏览器里却打不开、摸不动 | Chromium 里的冒烟测试，CI 单独一个任务（要装浏览器，不放进 `npm run check`） | `tools/smoke.mjs` | 3.5 已完成 |
 
 ## 构建
 
 `tools/build.mjs` 用 esbuild 把每个入口打成一个 IIFE 格式的文件，产物有三份（带 ✓ 的已经有）：
 
-- `dist/web/` ✓：调试，也用来生成手机试玩链接。`npm run build:web` 构建；`npm run dev` 监听改动并起本地服务（端口默认 8000，`PORT=xxxx npm run dev` 可改）
+- `dist/web/` ✓：调试，也用来生成手机试玩链接（推送 `dev` 后由 `.github/workflows/pages.yml` 发布到 `gh-pages` 分支，见 [playtest.md](playtest.md)）。`npm run build:web` 构建；`npm run dev` 监听改动并起本地服务（端口默认 8000，`PORT=xxxx npm run dev` 可改）
 - `dist/wechat/`：导入微信开发者工具（4.1）
 - `dist/douyin/`：导入抖音开发者工具（4.1）
 

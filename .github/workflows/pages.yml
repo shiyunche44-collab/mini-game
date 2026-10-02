@@ -1,0 +1,37 @@
+# 手机试玩链接：每次推送到 dev，先过 npm run check，再把 Web 版构建产物推到 gh-pages 分支。
+# GitHub Pages 的来源设成"从 gh-pages 分支发布"（仓库 Settings → Pages），链接就是
+# https://<用户名>.github.io/<仓库名>/ 。操作步骤和试玩要看什么见 docs/playtest.md。
+#
+# 不用 actions/deploy-pages：它走 github-pages 环境，默认只允许默认分支（main）部署，dev 会被环境保护规则拦下。
+# 也不用第三方 Action：只用 git 和自带的 GITHUB_TOKEN，推的只是构建产物，不会改 dev。
+name: pages
+
+on:
+  push:
+    branches: [dev]
+
+# 连续推送时只发布最新的
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build:web
+      - name: 推到 gh-pages 分支
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/publish-pages.mjs dist/web

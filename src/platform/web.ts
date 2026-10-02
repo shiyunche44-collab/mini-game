@@ -1,9 +1,17 @@
 // Web 平台实现：开发调试和手机试玩链接用。只把浏览器 API 翻译成 Platform 接口，不含游戏逻辑。
-import type { Canvas2D, Platform, PointerHandlers, RewardedPlacement, InterstitialPlacement, ScreenInfo } from './types.ts';
+import type {
+  Canvas2D,
+  InterstitialPlacement,
+  Platform,
+  PointerHandlers,
+  RewardedPlacement,
+  SafeArea,
+  ScreenInfo,
+} from './types.ts';
 
 /**
  * 把 canvas 铺满窗口，返回 Platform。窗口大小只在创建时读一次：
- * Platform 接口还没有"尺寸变了"的通知（记在 backlog），改窗口大小后要刷新页面。
+ * Platform 接口还没有"尺寸变了"的通知，转屏或改窗口宽度后由入口刷新页面（见 entry/web.ts）。
  */
 export function createWebPlatform(canvas: HTMLCanvasElement): Platform {
   const width = window.innerWidth;
@@ -27,8 +35,7 @@ export function createWebPlatform(canvas: HTMLCanvasElement): Platform {
     width,
     height,
     dpr,
-    // 浏览器读不到刘海和底部横条的尺寸，试玩时按没有处理
-    safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+    safeArea: readSafeArea(),
   };
 
   return {
@@ -225,4 +232,27 @@ function showMockRewarded(placement: RewardedPlacement): Promise<boolean> {
     });
     document.body.append(root);
   });
+}
+
+/**
+ * 读刘海和底部横条要避开的距离。页面用 viewport-fit=cover 铺到了刘海下面，不避开的话行李牌会被刘海盖住。
+ * 浏览器只在 CSS 里给这个值（env(safe-area-inset-*)），所以放一个看不见的元素，把它们当 padding，再读算出来的像素。
+ * 不支持 env() 的浏览器读到的是 0，也就是没有安全区。
+ */
+function readSafeArea(): SafeArea {
+  const probe = document.createElement('div');
+  probe.style.cssText =
+    'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+    'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+  document.body.append(probe);
+  const style = window.getComputedStyle(probe);
+  const px = (v: string): number => Number.parseFloat(v) || 0;
+  const area = {
+    top: px(style.paddingTop),
+    right: px(style.paddingRight),
+    bottom: px(style.paddingBottom),
+    left: px(style.paddingLeft),
+  };
+  probe.remove();
+  return area;
 }

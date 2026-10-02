@@ -28,3 +28,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+
+  # 浏览器冒烟测试：真的在 Chromium 里玩一遍。和上面的检查分开跑：它要装浏览器，慢一些；
+  # 本地用 npm run smoke 复现（第一次先 npx playwright install chromium）
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run smoke

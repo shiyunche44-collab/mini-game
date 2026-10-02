@@ -4,7 +4,7 @@
 //   node tools/build.mjs web            生产构建（压缩）
 //   node tools/build.mjs web --serve    开发：监听改动自动重新打包，并起一个本地服务（端口默认 8000，可用 PORT 改）
 // 现在只有 web；微信、抖音在 4.1 加进 TARGETS。
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as esbuild from 'esbuild';
@@ -27,6 +27,8 @@ export const TARGETS = {
 export async function bundle(name, { dev = false, write = true } = {}) {
   const t = TARGETS[name];
   if (!t) throw new Error(`没有这个平台：${name}（现有：${Object.keys(TARGETS).join('、')}）`);
+  // 写文件之前先清空输出目录：开发时留下的 sourcemap 之类的旧文件，不能混进生产构建的产物里
+  if (write) rmSync(join(ROOT, t.outdir), { recursive: true, force: true });
   const result = await esbuild.build(buildOptions(t, { dev, write }));
   if (write) copyTemplates(t);
   return result;
@@ -56,6 +58,7 @@ function copyTemplates(t) {
 
 async function serve(name) {
   const t = TARGETS[name];
+  rmSync(join(ROOT, t.outdir), { recursive: true, force: true });
   copyTemplates(t);
   const ctx = await esbuild.context({ ...buildOptions(t, { dev: true, write: true }), logLevel: 'info' });
   await ctx.watch();

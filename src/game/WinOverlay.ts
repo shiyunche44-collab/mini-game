@@ -164,18 +164,11 @@ export class WinOverlay {
   }
 
   private cardRect(): Rect {
-    const { content } = this.layout;
-    const w = Math.min(content.w, CARD_MAX_W);
-    const { height } = this.platform.screen;
-    // 垂直居中，屏幕太矮时贴着内容区顶部
-    const y = Math.max(content.y, content.y + (content.h - CARD_H) / 2);
-    return { x: content.x + (content.w - w) / 2, y: Math.min(y, height - CARD_H), w, h: CARD_H };
+    return winCardRect(this.layout, this.platform.screen.height);
   }
 
-  /** "下一站"按钮，在登机牌最下面 */
   private buttonRect(): Rect {
-    const c = this.cardRect();
-    return { x: c.x + 20, y: c.y + CARD_H - 64, w: c.w - 40, h: 48 };
+    return winButtonRect(this.layout, this.platform.screen.height);
   }
 
   private drawPass(ctx: Platform['ctx']): void {
@@ -320,4 +313,18 @@ export class WinOverlay {
 /** 登机口：关卡号算出来的字母加数字，只是装饰 */
 export function gate(n: number): string {
   return `${String.fromCharCode(65 + (n % 6))}${1 + ((n * 7) % 30)}`;
+}
+
+/** 登机牌的位置：在内容区里垂直居中，屏幕太矮时贴着内容区顶部 */
+export function winCardRect(layout: Layout, screenHeight: number): Rect {
+  const { content } = layout;
+  const w = Math.min(content.w, CARD_MAX_W);
+  const y = Math.max(content.y, content.y + (content.h - CARD_H) / 2);
+  return { x: content.x + (content.w - w) / 2, y: Math.min(y, screenHeight - CARD_H), w, h: CARD_H };
+}
+
+/** "下一站"按钮，在登机牌最下面 */
+export function winButtonRect(layout: Layout, screenHeight: number): Rect {
+  const c = winCardRect(layout, screenHeight);
+  return { x: c.x + 20, y: c.y + CARD_H - 64, w: c.w - 40, h: 48 };
 }
