@@ -3,7 +3,7 @@
 // 用法：
 //   node tools/build.mjs web            生产构建（压缩）
 //   node tools/build.mjs web --serve    开发：监听改动自动重新打包，并起一个本地服务（端口默认 8000，可用 PORT 改）
-// 现在只有 web；微信、抖音在 4.1 加进 TARGETS。
+// 平台：web、wechat、douyin。微信、抖音的产物目录可以直接导入各自的开发者工具（见 docs/devtools.md）。
 import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +17,23 @@ export const TARGETS = {
     entry: 'src/entry/web.ts',
     outdir: 'dist/web',
     copy: [['platforms/web/index.html', 'index.html']],
+  },
+  // 小游戏要求入口文件叫 game.js，旁边放 game.json 和 project.config.json
+  wechat: {
+    entry: 'src/entry/wechat.ts',
+    outdir: 'dist/wechat',
+    copy: [
+      ['platforms/wechat/game.json', 'game.json'],
+      ['platforms/wechat/project.config.json', 'project.config.json'],
+    ],
+  },
+  douyin: {
+    entry: 'src/entry/douyin.ts',
+    outdir: 'dist/douyin',
+    copy: [
+      ['platforms/douyin/game.json', 'game.json'],
+      ['platforms/douyin/project.config.json', 'project.config.json'],
+    ],
   },
 };
 

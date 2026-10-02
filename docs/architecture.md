@@ -47,11 +47,11 @@ src/
   core/      rng.ts ✓  items.ts ✓  levels.ts ✓  game.ts ✓  progress.ts ✓
   engine/    loop.ts ✓  tween.ts ✓  input.ts ✓  draw.ts ✓
   game/      PlayScene.ts ✓  Session.ts ✓  WinOverlay.ts ✓  pieceView.ts ✓  layout.ts ✓  snap.ts ✓  theme.ts ✓  start.ts ✓
-  platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts ✓  wechat.ts  douyin.ts  tt.d.ts
-  entry/     web.ts ✓  wechat.ts  douyin.ts（每个入口配一份 tsconfig.<入口名>.json）
+  platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts ✓  wechat.ts ✓  douyin.ts ✓  tt.d.ts ✓
+  entry/     web.ts ✓  wechat.ts ✓  douyin.ts ✓（每个入口配一份 tsconfig.<入口名>.json）
 test/        fake-platform.ts ✓、core 单测、game 层在假平台上的测试、Playwright 冒烟测试
-tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs ✓  check-size.mjs ✓  smoke.mjs ✓  publish-pages.mjs ✓
-platforms/   web/index.html ✓；wechat/ 和 douyin/ 的 game.json、project.config.json 模板
+tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs ✓  check-size.mjs ✓  smoke.mjs ✓  publish-pages.mjs ✓  mini-bundle.test.mjs ✓
+platforms/   web/index.html ✓；wechat/ 和 douyin/ 的 game.json、project.config.json 模板 ✓
 docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 ```
 
@@ -86,7 +86,7 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 
 - 故意没有放进去的：`roundRect`、`ellipse`、`filter`、`letterSpacing`、`fontKerning`、`direction`、`createPattern`、`getTransform`、`isPointInPath`、`OffscreenCanvas`。圆角矩形用 `arcTo` 自己画（`engine/draw.ts`）。
 - `src/platform/canvas-compat.check.ts` 在编译期保证这个子集确实是浏览器 Canvas 的子集。
-- 微信的类型库里 `RenderingContext` 是空接口，没法在编译期对照，微信、抖音的实际表现靠 4.1 真机验证。
+- 微信的类型库里 `RenderingContext` 是空接口，没法在编译期对照，微信、抖音的画布实际表现靠开发者工具和真机验证（[devtools.md](devtools.md)）。
 
 ## 类型检查的分层
 
@@ -95,7 +95,7 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 | 目录 | 类型库 | 效果 |
 |---|---|---|
 | core、engine、game | 只有 ES2020 | 写 `window`、`document`、`wx` 直接编译失败 |
-| entry（每个入口一份 `tsconfig.<入口名>.json`） | web 入口：ES2020 + DOM；微信、抖音入口在 4.1 配各自的类型库 | 入口会引用对应的平台实现，平台实现要用平台 API，所以入口要带同一套类型库；入口没配 tsconfig，类型检查直接失败 |
+| entry（每个入口一份 `tsconfig.<入口名>.json`） | web 入口：ES2020 + DOM；微信入口：ES2020 + 微信类型库，不带 DOM；抖音入口：ES2020 + `platform/tt.d.ts`（`tt` 是 any），不带 DOM | 入口会引用对应的平台实现，平台实现要用平台 API，所以入口要带同一套类型库；入口没配 tsconfig，类型检查直接失败 |
 | platform | ES2020、DOM、微信类型 | 平台实现可以用平台 API |
 | test | ES2020、node | 测试可以用 node 的 API |
 
@@ -118,6 +118,7 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 | 没跑检查就推送 | GitHub Actions 跑 `npm run check` | `.github/workflows/check.yml` | 0.5 已完成 |
 | 关卡生成变慢 | 单测：每关生成不超过 50ms | core 单测 | 1.2 |
 | 包体膨胀 | 产物超过 300KB（压缩后的 JS）时报错 | `tools/check-size.mjs` | 2.2 已完成 |
+| 小游戏产物里混进浏览器接口 | 微信、抖音入口的 tsconfig 不带 DOM；把构建出的产物放进只有 `wx`（或 `tt`）的 node 沙箱里运行 | `src/entry/tsconfig.*.json`、`tools/mini-bundle.test.mjs` | 4.1 已完成 |
 | 单测都过了，页面在真浏览器里却打不开、摸不动 | Chromium 里的冒烟测试，CI 单独一个任务（要装浏览器，不放进 `npm run check`） | `tools/smoke.mjs` | 3.5 已完成 |
 
 ## 构建
@@ -125,8 +126,10 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 `tools/build.mjs` 用 esbuild 把每个入口打成一个 IIFE 格式的文件，产物有三份（带 ✓ 的已经有）：
 
 - `dist/web/` ✓：调试，也用来生成手机试玩链接（推送 `dev` 后由 `.github/workflows/pages.yml` 发布到 `gh-pages` 分支，见 [playtest.md](playtest.md)）。`npm run build:web` 构建；`npm run dev` 监听改动并起本地服务（端口默认 8000，`PORT=xxxx npm run dev` 可改）
-- `dist/wechat/`：导入微信开发者工具（4.1）
-- `dist/douyin/`：导入抖音开发者工具（4.1）
+- `dist/wechat/` ✓：导入微信开发者工具。`npm run build:wechat`
+- `dist/douyin/` ✓：导入抖音开发者工具。`npm run build:douyin`
+
+导入步骤和要确认的事见 [devtools.md](devtools.md)。
 
 ## 改架构的流程
 

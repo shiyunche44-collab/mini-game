@@ -1,0 +1,11 @@
+{
+  "description": "整理行李箱（抖音小游戏）。appid 只是占位：导入时在对话框里填你自己的 AppID 或选测试号。",
+  "projectname": "pack-the-suitcase",
+  "appid": "tt00000000000000000",
+  "setting": {
+    "urlCheck": false,
+    "es6": false,
+    "postcss": false,
+    "minified": false
+  }
+}

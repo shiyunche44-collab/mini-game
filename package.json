@@ -12,6 +12,8 @@
     "typecheck": "node tools/typecheck.mjs",
     "test": "node --test --test-reporter=spec \"test/**/*.test.ts\" \"tools/**/*.test.mjs\"",
     "build:web": "node tools/build.mjs web",
+    "build:wechat": "node tools/build.mjs wechat",
+    "build:douyin": "node tools/build.mjs douyin",
     "dev": "node tools/build.mjs web --serve",
     "smoke": "node --test --test-reporter=spec tools/smoke.mjs",
     "levels:preview": "node tools/levels-preview.mjs"

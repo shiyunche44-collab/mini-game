@@ -22,6 +22,7 @@
 | `npm run typecheck` | 只跑分层类型检查 |
 | `npm run check:size` | 只跑包体检查（产物 JS 不超过 300KB） |
 | `npm run build:web` | 构建 Web 产物到 `dist/web/` |
+| `npm run build:wechat` / `npm run build:douyin` | 构建微信 / 抖音产物到 `dist/wechat/`、`dist/douyin/`，可直接导入开发者工具（步骤见 [docs/devtools.md](docs/devtools.md)） |
 | `npm run smoke` | 浏览器冒烟测试（需要 Chromium：`npx playwright install chromium`）。不在 `npm run check` 里，CI 单独跑 |
 | `npm run dev` | 开发：监听改动、起本地服务（端口默认 8000，`PORT=xxxx` 可改） |
 | `npm test` | 只跑单元测试 |
