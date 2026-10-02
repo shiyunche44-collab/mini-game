@@ -18,7 +18,7 @@
 
 | 编号 | 任务 | 验收标准 | 状态 |
 |---|---|---|---|
-| 1.1 | `rng`、`items` 迁移成 TS + 单测（旋转去重、emoji 位置） | `npm run check` 通过 | |
+| 1.1 | `rng`、`items` 迁移成 TS + 单测（旋转去重、emoji 位置） | `npm run check` 通过 ✅ |
 | 1.2 | 关卡生成器 + 单测：前 200 关都正好铺满；同一关号结果一致；每关生成小于 50ms | 同上 | |
 | 1.3 | `npm run levels:preview`：在命令行打印前 N 关的文字版网格和物品清单 | 用户看前 10 关，判断难度梯度是否合理 | |
 | 1.4 | 一局规则 `game.ts` + 单测：放置、移除、旋转、提示、快照与恢复 | `npm run check` 通过 | |
@@ -26,7 +26,7 @@
 
 备注：
 
-- 1.1：草稿里的 `weightedOrder` 用了 `Math.pow`，迁移时按 ADR 0003 换成结果确定的运算。
+- 1.1：草稿里的 `weightedOrder` 用了 `Math.pow`，已按 ADR 0003 换成逐个按权重抽取的写法（分布相同）。`test/core-determinism.test.ts` 检查 core 里没有 `Math.pow`、`**`、`Math.random`、`Date` 这类写法。
 - 1.2：按 ADR 0003，加上前若干关生成结果的指纹测试。
 
 ## 阶段 2：运行时 + 静态画面（Web）
