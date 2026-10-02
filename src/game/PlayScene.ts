@@ -59,6 +59,14 @@ interface Flight {
   lift: number;
 }
 
+/** 场景把"局面变了"告诉外面（存档、结算）。场景自己不碰存档和广告 */
+export interface SceneEvents {
+  /** 摆放、取出、旋转之后，局面和之前不一样了 */
+  change(): void;
+  /** 最后一件物品也装进去了。这时不再发 change，外面直接收尾 */
+  complete(): void;
+}
+
 /** 正在转的物品：angle 是它离最终朝向还差多少弧度，从 -90° 走到 0 */
 interface Spin {
   angle: number;
@@ -75,6 +83,7 @@ export class PlayScene implements GestureHandlers {
   private readonly platform: Pick<Platform, 'ctx' | 'screen'>;
   readonly game: Game;
   readonly layout: Layout;
+  private readonly events: SceneEvents | undefined;
   private readonly tweens = new Tweens();
   private dragged: Dragged | null = null;
   private pickup: { cancel(): void } | null = null;
@@ -82,9 +91,10 @@ export class PlayScene implements GestureHandlers {
   private readonly spins = new Map<number, Spin>();
   private readonly shakes = new Map<number, Shake>();
 
-  constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game) {
+  constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game, events?: SceneEvents) {
     this.platform = platform;
     this.game = game;
+    this.events = events;
     this.layout = computeLayout(platform.screen, game.level);
   }
 
@@ -121,8 +131,12 @@ export class PlayScene implements GestureHandlers {
     if (id === null || !piece) return;
     // 这一关不让转，或者怎么转都是同一个形状（2×2 的书）：没什么可转的，不给反馈
     if (!this.game.level.rotate || piece.item.orients.length < 2) return;
-    if (this.game.rotate(id)) this.startSpin(id);
-    else this.startShake(id);
+    if (this.game.rotate(id)) {
+      this.startSpin(id);
+      this.events?.change();
+    } else {
+      this.startShake(id);
+    }
   }
 
   dragStart(e: DragEvent): void {
@@ -193,11 +207,14 @@ export class PlayScene implements GestureHandlers {
 
     let target: { x: number; y: number; k: number };
     let ms = RETURN_MS;
+    let changed = false;
     if (where !== null && d.snap && this.game.place(d.id, d.snap.r, d.snap.c)) {
       target = { x: board.grid.x + d.snap.c * board.cell, y: board.grid.y + d.snap.r * board.cell, k: board.cell };
       ms = DROP_MS;
+      changed = true;
     } else if (where === 'tray' && d.from) {
       this.game.remove(d.id);
+      changed = true;
       target = { ...this.trayOrigin(d.id), k: tray.cell };
     } else if (d.from) {
       target = { x: board.grid.x + d.from.c * board.cell, y: board.grid.y + d.from.r * board.cell, k: board.cell };
@@ -211,6 +228,11 @@ export class PlayScene implements GestureHandlers {
       ease: easing.easeOutCubic,
       onComplete: () => void this.flights.delete(d.id),
     });
+
+    if (changed) {
+      if (this.game.isComplete()) this.events?.complete();
+      else this.events?.change();
+    }
   }
 
   // -------------------------------------------------------------------------

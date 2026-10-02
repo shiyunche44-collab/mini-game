@@ -7,6 +7,7 @@ import { generateLevel } from '../src/core/levels.ts';
 import { createGestureRecognizer } from '../src/engine/input.ts';
 import { Loop } from '../src/engine/loop.ts';
 import { LIFT_CELLS, PlayScene } from '../src/game/PlayScene.ts';
+import { Session, type SessionOptions } from '../src/game/Session.ts';
 import { FakePlatform, type DrawCall } from './fake-platform.ts';
 
 export const FRAME = FakePlatform.FRAME_MS;
@@ -78,3 +79,40 @@ export const emojiPos = (calls: DrawCall[], emoji: string) => {
 };
 
 export const fontSize = (c: DrawCall | undefined) => Number(/(\d+)px/.exec(c?.style.font ?? '')?.[1]);
+
+/** 搭一整局流程（带存档、过关、下一站）。platform 可以传进来，用来模拟"退出再打开"：新的假平台里放进旧的存档 */
+export function setupSession(options: SessionOptions = {}, p = new FakePlatform()) {
+  const session = new Session(p, options);
+  p.onPointer(createGestureRecognizer(() => p.now(), session));
+  new Loop(p, { update: (dt) => session.update(dt), render: () => session.render() }).start();
+  p.advance(FRAME);
+  return { p, session, ctx: (): Ctx => ({ p, game: session.current.game, scene: session.current }) };
+}
+export type SessionCtx = ReturnType<typeof setupSession>;
+
+/** 照答案把这一关玩通：每件物品先点按转到答案的朝向，再拖到答案的位置 */
+export function solveLevel(ctx: Ctx): void {
+  for (let id = 0; id < ctx.game.pieces.length; id++) {
+    const sol = ctx.game.level.pieces[id]?.solution;
+    assert.ok(sol);
+    let taps = 0;
+    while (ctx.game.pieces[id]?.oi !== sol.oi) {
+      assert.ok(++taps <= 3, `第 ${id} 件转了 ${taps} 下还没转对`);
+      ctx.p.touch.tap(...traySlotCenter(ctx, id));
+      ctx.p.advance(300);
+    }
+    dragIn(ctx, id, sol.r, sol.c);
+    ctx.p.advance(300);
+  }
+}
+
+/** 画面上某段文字画在哪（取最后一次画的）；没画返回 null */
+export function textPos(calls: DrawCall[], text: string): [number, number] | null {
+  const c = calls.filter((x) => x.op === 'fillText' && x.args[0] === text).at(-1);
+  return c ? [c.args[1] as number, c.args[2] as number] : null;
+}
+
+export const hasText = (calls: DrawCall[], text: string): boolean => textPos(calls, text) !== null;
+
+/** 等 Promise 微任务和定时器都跑完（插屏广告是异步的） */
+export const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));

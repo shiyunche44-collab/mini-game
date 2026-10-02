@@ -28,6 +28,18 @@ export const theme = {
   blocked: '#66727f',
   blockedDark: '#3f4954',
 
+  // 合上的箱盖
+  lid: '#4a7fb0',
+  lidStrap: '#35618c',
+  lidLatch: '#f2c14e',
+  lidLatchDark: '#c9962a',
+
+  // 印章和登机牌
+  stamp: '#d6453d',
+  dim: 'rgba(40, 28, 20, 0.55)',
+  passBand: '#e8604c',
+  passPaper: '#fffdf8',
+
   // 托盘
   trayFill: 'rgba(255, 255, 255, 0.55)',
   trayLine: '#e3c99b',

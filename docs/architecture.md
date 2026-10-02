@@ -46,7 +46,7 @@ entry → 平台实现 → platform/types.ts
 src/
   core/      rng.ts ✓  items.ts ✓  levels.ts ✓  game.ts ✓  progress.ts ✓
   engine/    loop.ts ✓  tween.ts ✓  input.ts ✓  draw.ts ✓
-  game/      PlayScene.ts ✓  WinOverlay.ts  pieceView.ts ✓  layout.ts ✓  snap.ts ✓  theme.ts ✓  start.ts ✓
+  game/      PlayScene.ts ✓  Session.ts ✓  WinOverlay.ts ✓  pieceView.ts ✓  layout.ts ✓  snap.ts ✓  theme.ts ✓  start.ts ✓
   platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts ✓  wechat.ts  douyin.ts  tt.d.ts
   entry/     web.ts ✓  wechat.ts  douyin.ts（每个入口配一份 tsconfig.<入口名>.json）
 test/        fake-platform.ts ✓、core 单测、game 层在假平台上的测试、Playwright 冒烟测试
