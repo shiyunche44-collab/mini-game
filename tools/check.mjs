@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 const STEPS = [
   ['架构检查', 'check:arch'],
   ['类型检查', 'typecheck'],
+  ['包体检查', 'check:size'],
   ['单元测试', 'test'],
 ];
 

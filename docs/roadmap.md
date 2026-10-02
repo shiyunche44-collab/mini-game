@@ -37,13 +37,15 @@
 | 编号 | 任务 | 验收标准 | 状态 |
 |---|---|---|---|
 | 2.1 | engine：主循环、补间、输入识别（点击 / 拖动）+ 单测 | `npm run check` 通过 | ✅ |
-| 2.2 | Web 平台实现、Web 入口、`build:web` 和 `dev` 命令、包体检查；先只画背景 | 浏览器能打开，看到背景 | |
+| 2.2 | Web 平台实现、Web 入口、`build:web` 和 `dev` 命令、包体检查；先只画背景 | 浏览器能打开，看到背景 | ✅ |
 | 2.3 | 布局 + 静态绘制：箱子、托盘里的物品、按钮、行李牌 | 375×667、390×844、桌面三种尺寸的截图发给用户确认视觉 | |
 
 备注：
 
 - 2.1：已按 [ADR 0004](adr/0004-platform-frame-and-clock.md) 给 Platform 加了 `requestFrame`（帧时间，单调）和 `now`（墙上时钟，要存档的时间用它），假平台用 `advance(ms)` 手动推进时间。三个平台实现（2.2、4.1）要补上这两个成员。点击 / 拖动的阈值（`TAP_MAX_MOVE_PX` = 10 像素、`TAP_MAX_MS` = 500 毫秒）是我定的，没有别处依据，真机试玩后可以改。主循环把 dt 夹在 100ms 以内。`draw.ts`（圆角矩形等）留到 2.3。
-- 2.2：`src/entry/tsconfig.json` 只带 ES2020。`entry/web.ts` 引用 `platform/web.ts` 时，后者会按 entry 的配置再检查一遍，DOM 类型会报错。要给每个入口配上对应平台的类型库。
+- 2.2：入口的类型库已按这个办法解决：每个入口 `X.ts` 配一份 `src/entry/tsconfig.X.json`，`tools/typecheck.mjs` 逐个检查，入口没配 tsconfig 会失败。web 入口带 DOM；4.1 给微信、抖音入口配各自的类型库。
+  - Web 平台没有 `onResize`：窗口大小在创建时读一次，改窗口大小要刷新页面（记在 backlog）。广告只在控制台打日志并当作看完，弹层版本在 3.4。
+  - 画面现在只有一层渐变背景（`game/start.ts`、`theme.ts`）。包体检查已并入 `npm run check`，现在 web 产物约 3KB。
 
 ## 阶段 3：可玩原型（Web）
 

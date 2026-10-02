@@ -8,8 +8,11 @@
   "scripts": {
     "check": "node tools/check.mjs",
     "check:arch": "node tools/check-arch.mjs",
+    "check:size": "node tools/check-size.mjs",
     "typecheck": "node tools/typecheck.mjs",
     "test": "node --test --test-reporter=spec \"test/**/*.test.ts\" \"tools/**/*.test.mjs\"",
+    "build:web": "node tools/build.mjs web",
+    "dev": "node tools/build.mjs web --serve",
     "levels:preview": "node tools/levels-preview.mjs"
   },
   "devDependencies": {

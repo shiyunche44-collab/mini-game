@@ -17,9 +17,12 @@
 | 命令 | 作用 |
 |---|---|
 | `npm ci` | 安装依赖 |
-| `npm run check` | 全部检查：架构检查、类型检查、单元测试。**提交前必须通过** |
+| `npm run check` | 全部检查：架构检查、类型检查、包体检查、单元测试。**提交前必须通过** |
 | `npm run check:arch` | 只跑架构检查 |
 | `npm run typecheck` | 只跑分层类型检查 |
+| `npm run check:size` | 只跑包体检查（产物 JS 不超过 300KB） |
+| `npm run build:web` | 构建 Web 产物到 `dist/web/` |
+| `npm run dev` | 开发：监听改动、起本地服务（端口默认 8000，`PORT=xxxx` 可改） |
 | `npm test` | 只跑单元测试 |
 | `npm run levels:preview` | 在命令行打印前 10 关的答案网格和物品清单；`-- 30` 看前 30 关，`-- 11-20` 看第 11～20 关 |
 

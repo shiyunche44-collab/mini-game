@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover：让画布铺到刘海和底部横条下面；禁止缩放，避免双击和双指缩放干扰游戏 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>整理行李箱</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #fff6e5;
+      }
+      /* touch-action: none 让浏览器不要把手指拖动当成页面滚动 */
+      canvas {
+        display: block;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <script src="game.js"></script>
+  </body>
+</html>

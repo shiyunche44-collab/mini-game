@@ -46,12 +46,12 @@ entry → 平台实现 → platform/types.ts
 src/
   core/      rng.ts ✓  items.ts ✓  levels.ts ✓  game.ts ✓  progress.ts ✓
   engine/    loop.ts ✓  tween.ts ✓  input.ts ✓  draw.ts
-  game/      PlayScene.ts  WinOverlay.ts  pieceView.ts  layout.ts  theme.ts  start.ts
-  platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts  wechat.ts  douyin.ts  tt.d.ts
-  entry/     web.ts  wechat.ts  douyin.ts
+  game/      PlayScene.ts  WinOverlay.ts  pieceView.ts  layout.ts  theme.ts ✓  start.ts ✓
+  platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts ✓  wechat.ts  douyin.ts  tt.d.ts
+  entry/     web.ts ✓  wechat.ts  douyin.ts（每个入口配一份 tsconfig.<入口名>.json）
 test/        fake-platform.ts ✓、core 单测、game 层在假平台上的测试、Playwright 冒烟测试
-tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs  check-size.mjs
-platforms/   wechat/ 和 douyin/ 的 game.json、project.config.json 模板
+tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs ✓  check-size.mjs ✓
+platforms/   web/index.html ✓；wechat/ 和 douyin/ 的 game.json、project.config.json 模板
 docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 ```
 
@@ -94,11 +94,12 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 
 | 目录 | 类型库 | 效果 |
 |---|---|---|
-| core、engine、game、entry | 只有 ES2020 | 写 `window`、`document`、`wx` 直接编译失败 |
+| core、engine、game | 只有 ES2020 | 写 `window`、`document`、`wx` 直接编译失败 |
+| entry（每个入口一份 `tsconfig.<入口名>.json`） | web 入口：ES2020 + DOM；微信、抖音入口在 4.1 配各自的类型库 | 入口会引用对应的平台实现，平台实现要用平台 API，所以入口要带同一套类型库；入口没配 tsconfig，类型检查直接失败 |
 | platform | ES2020、DOM、微信类型 | 平台实现可以用平台 API |
 | test | ES2020、node | 测试可以用 node 的 API |
 
-被引用的文件会按引用方的配置再检查一遍。例如假平台引用了 platform/types.ts，所以 types.ts 也要在 test 不带 DOM 的配置下通过，往里面写 `HTMLCanvasElement` 这类类型会被拦下。
+被引用的文件会按引用方的配置再检查一遍。入口因此会把 game 等业务层文件也按带 DOM 的配置再查一遍，但业务层直接用 `window` 这类全局对象仍会被架构检查和各层自己的 tsconfig 拦住。例如假平台引用了 platform/types.ts，所以 types.ts 也要在 test 不带 DOM 的配置下通过，往里面写 `HTMLCanvasElement` 这类类型会被拦下。
 
 所有层都开启 `strict`、`noUncheckedIndexedAccess` 和 `erasableSyntaxOnly`。最后一项禁止 `enum`、`namespace` 这类不能直接擦掉的语法，这样 node 可以直接运行 `.ts` 测试，不需要先编译。
 
@@ -116,13 +117,13 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 | 范围慢慢膨胀 | 每个任务写明不做什么；计划外的想法记进 backlog | `docs/backlog.md` | 0.4 已完成 |
 | 没跑检查就推送 | GitHub Actions 跑 `npm run check` | `.github/workflows/check.yml` | 0.5 已完成 |
 | 关卡生成变慢 | 单测：每关生成不超过 50ms | core 单测 | 1.2 |
-| 包体膨胀 | 产物超过 300KB 时报错 | `tools/check-size.mjs` | 2.2 |
+| 包体膨胀 | 产物超过 300KB（压缩后的 JS）时报错 | `tools/check-size.mjs` | 2.2 已完成 |
 
-## 构建（计划）
+## 构建
 
-esbuild 把每个入口打成一个 IIFE 格式的文件，产物有三份：
+`tools/build.mjs` 用 esbuild 把每个入口打成一个 IIFE 格式的文件，产物有三份（带 ✓ 的已经有）：
 
-- `dist/web/`：调试，也用来生成手机试玩链接（2.2）
+- `dist/web/` ✓：调试，也用来生成手机试玩链接。`npm run build:web` 构建；`npm run dev` 监听改动并起本地服务（端口默认 8000，`PORT=xxxx npm run dev` 可改）
 - `dist/wechat/`：导入微信开发者工具（4.1）
 - `dist/douyin/`：导入抖音开发者工具（4.1）
 
