@@ -7,7 +7,8 @@
   },
   "scripts": {
     "typecheck": "node tools/typecheck.mjs",
-    "check": "npm run typecheck"
+    "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run test"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
