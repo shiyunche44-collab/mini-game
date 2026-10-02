@@ -113,7 +113,7 @@ drafts/      上一版 JS 草稿，只作参考，1.5 完成后删除
 | 游戏层悄悄依赖浏览器行为 | 假平台：记录绘制调用，模拟触摸、广告、前后台 | `test/fake-platform.ts` | 0.2 已完成；game 层测试从 3.1 开始 |
 | 规则在多次会话之间被遗忘 | 本文档、ADR、`CLAUDE.md` | `docs/`、`CLAUDE.md` | 0.4 已完成 |
 | 范围慢慢膨胀 | 每个任务写明不做什么；计划外的想法记进 backlog | `docs/backlog.md` | 0.4 已完成 |
-| 没跑检查就推送 | GitHub Actions 跑 `npm run check` | `.github/workflows/` | 0.5 |
+| 没跑检查就推送 | GitHub Actions 跑 `npm run check` | `.github/workflows/check.yml` | 0.5 已完成 |
 | 关卡生成变慢 | 单测：每关生成不超过 50ms | core 单测 | 1.2 |
 | 包体膨胀 | 产物超过 300KB 时报错 | `tools/check-size.mjs` | 2.2 |
 

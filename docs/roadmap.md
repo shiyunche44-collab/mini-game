@@ -12,7 +12,7 @@
 | 0.2 | 接口定义：`platform/types.ts`（Platform 接口、Canvas2D 子集接口）+ `test/fake-platform.ts` | 类型检查通过；假平台的自测通过 | ✅ |
 | 0.3 | `check-arch.mjs`（含自测）+ `npm run check` 总入口 | 在 core 里临时写 `window` 或引用 game，检查会报错并指出规则；撤掉后通过 | ✅ |
 | 0.4 | 文档：`docs/architecture.md`、ADR 0001～0003、`CLAUDE.md`、`docs/backlog.md`，以及 `docs/design.md`、本文件 | 用户通读一遍，确认规则 | ✅ |
-| 0.5 | CI：GitHub Actions 跑 `npm run check` | 推送后 Actions 显示通过（如果没有权限推送 workflow 文件，说明原因，先只在本地检查） | |
+| 0.5 | CI：GitHub Actions 跑 `npm run check` | 推送后 Actions 显示通过（如果没有权限推送 workflow 文件，说明原因，先只在本地检查） | ✅ |
 
 ## 阶段 1：核心逻辑（只有逻辑，没有画面）
 
