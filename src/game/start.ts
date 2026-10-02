@@ -1,23 +1,28 @@
 // 游戏启动：三个平台的入口都调这一个函数，入口自己只负责创建 Platform。
+import { Game } from '../core/game.ts';
+import { generateLevel } from '../core/levels.ts';
+import { loadProgress, SAVE_KEY } from '../core/progress.ts';
 import { Loop } from '../engine/loop.ts';
 import type { Platform } from '../platform/types.ts';
-import { theme } from './theme.ts';
+import { PlayScene } from './PlayScene.ts';
 
-function drawBackground(platform: Platform): void {
-  const { ctx, screen } = platform;
-  const sky = ctx.createLinearGradient(0, 0, 0, screen.height);
-  sky.addColorStop(0, theme.backgroundTop);
-  sky.addColorStop(1, theme.backgroundBottom);
-  ctx.fillStyle = sky;
-  // 每帧整屏重画，不需要 clearRect
-  ctx.fillRect(0, 0, screen.width, screen.height);
+export interface StartOptions {
+  /** 调试用：直接看第几关，不读存档 */
+  level?: number;
+  /** 调试用：开局先用掉几次提示，用来看箱子里摆了东西的样子 */
+  hints?: number;
 }
 
 /** 启动主循环。返回 Loop，测试可以用它停下。 */
-export function startGame(platform: Platform): Loop {
+export function startGame(platform: Platform, options: StartOptions = {}): Loop {
+  const n = options.level ?? loadProgress(platform.storage.get(SAVE_KEY, null)).level;
+  const game = new Game(generateLevel(n));
+  for (let i = 0; i < (options.hints ?? 0); i++) game.hint();
+
+  const scene = new PlayScene(platform, game);
   const loop = new Loop(platform, {
     update: () => {},
-    render: () => drawBackground(platform),
+    render: () => scene.render(),
   });
   loop.start();
   return loop;
