@@ -1,6 +1,9 @@
 // 一次游戏的整体流程：读存档、玩当前这一关、过关、下一站。
 // PlayScene 管一关之内的画面和操作，WinOverlay 管过关画面，这里管它们之间怎么衔接，以及存档和广告。
 //
+// 按钮：重来免费；提示和跳关要看完激励视频，看完（rewarded 返回 true）才给，中途关闭、加载失败都不给。
+// 跳关之后不弹插屏：跳关是看完广告换来的，紧接着再弹一个插屏很烦（见 core/progress.ts）。
+//
 // 存档（key 是 SAVE_KEY）：
 // - 摆放、取出、旋转之后，把进行中的局面存下来，随时退出都能接着玩
 // - 全部装下的那一刻就存"下一关"，不等玩家点"下一站"：登机牌上退出也不会白玩
@@ -20,7 +23,7 @@ import {
 } from '../core/progress.ts';
 import type { DragEvent, GestureHandlers } from '../engine/input.ts';
 import type { Platform } from '../platform/types.ts';
-import { PlayScene } from './PlayScene.ts';
+import { PlayScene, type ButtonKind } from './PlayScene.ts';
 import { WinOverlay } from './WinOverlay.ts';
 
 export interface SessionOptions {
@@ -126,6 +129,7 @@ export class Session implements GestureHandlers {
     return new PlayScene(this.platform, game, {
       change: () => this.onChange(),
       complete: () => this.onComplete(),
+      button: (kind) => this.onButton(kind),
     });
   }
 
@@ -146,6 +150,34 @@ export class Session implements GestureHandlers {
     this.win = new WinOverlay(this.platform, layout, { level: cleared, hintsUsed: game.hintsUsed }, () => {
       void this.advance(cleared.n);
     });
+  }
+
+  private onButton(kind: ButtonKind): void {
+    if (this.busy) return;
+    if (kind === 'restart') this.scene.restart();
+    else if (kind === 'hint') void this.requestHint();
+    else void this.requestSkip();
+  }
+
+  /** 看广告，返回看完没有。看广告期间 busy，不响应触摸，所以回来的时候局面还是点按钮时的样子 */
+  private async watchRewarded(placement: 'hint' | 'skip'): Promise<boolean> {
+    this.busy = true;
+    try {
+      return await this.platform.ads.rewarded(placement);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async requestHint(): Promise<void> {
+    if (await this.watchRewarded('hint')) this.scene.applyHint();
+  }
+
+  private async requestSkip(): Promise<void> {
+    if (!(await this.watchRewarded('skip'))) return;
+    this.progress = nextLevel(this.progress);
+    this.save();
+    this.scene = this.makeScene(this.newGame());
   }
 
   /**

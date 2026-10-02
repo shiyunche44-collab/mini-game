@@ -65,7 +65,7 @@ docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
 | 触摸 | `onPointer` | `wx.onTouch*` | `tt.onTouch*` | pointer 事件 |
 | 下一帧、时钟 | `requestFrame`、`now` | `requestAnimationFrame`、`Date.now` | 同左（`tt`） | `requestAnimationFrame`、`Date.now` |
 | 存储 | `storage` | `wx.getStorageSync` 等 | `tt.getStorageSync` 等 | localStorage（包 try/catch） |
-| 激励视频、插屏 | `ads` | `wx.createRewardedVideoAd`、`createInterstitialAd` | `tt` 的同名接口 | 模拟弹层 |
+| 激励视频、插屏 | `ads` | `wx.createRewardedVideoAd`、`createInterstitialAd` | `tt` 的同名接口 | 激励视频：模拟弹层（倒计时后才能领奖，可提前关闭）；插屏：只打日志 |
 | 分享 | `share` | `wx.shareAppMessage` | `tt.shareAppMessage` | 无 |
 | 震动 | `vibrate` | `wx.vibrateShort` | `tt.vibrateShort` | `navigator.vibrate` |
 | 前后台 | `onShow`、`onHide` | `wx.onShow` 等 | `tt.onShow` 等 | visibilitychange |

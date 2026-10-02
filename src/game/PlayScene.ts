@@ -27,6 +27,7 @@ const PICKUP_MS = 110;
 const DROP_MS = 130;
 const RETURN_MS = 240;
 const GHOST_ALPHA = 0.5;
+const HINT_MS = 220;
 const SPIN_MS = 190;
 const SHAKE_MS = 300;
 /** 抖动的来回次数，幅度（单位：格）。抖得太大会盖到旁边的物品 */
@@ -65,7 +66,11 @@ export interface SceneEvents {
   change(): void;
   /** 最后一件物品也装进去了。这时不再发 change，外面直接收尾 */
   complete(): void;
+  /** 点了底部的按钮。重来的事场景自己做不了主（要不要问广告、存档），所以都交给外面决定 */
+  button(kind: ButtonKind): void;
 }
+
+export type ButtonKind = 'restart' | 'hint' | 'skip';
 
 /** 正在转的物品：angle 是它离最终朝向还差多少弧度，从 -90° 走到 0 */
 interface Spin {
@@ -126,6 +131,11 @@ export class PlayScene implements GestureHandlers {
 
   tap(x: number, y: number): void {
     if (this.dragged) return;
+    const kind = this.buttonAt(x, y);
+    if (kind) {
+      this.events?.button(kind);
+      return;
+    }
     const id = this.pieceAtPoint(x, y);
     const piece = id === null ? undefined : this.game.pieces[id];
     if (id === null || !piece) return;
@@ -203,7 +213,7 @@ export class PlayScene implements GestureHandlers {
     const { board, tray } = this.layout;
     const k = this.dragCell(d);
     const start = this.dragOrigin(d, k);
-    const flight: Flight = { x: start.x, y: start.y, k, lift: this.dragLift(d) };
+    const from = { x: start.x, y: start.y, k, lift: this.dragLift(d) };
 
     let target: { x: number; y: number; k: number };
     let ms = RETURN_MS;
@@ -221,18 +231,115 @@ export class PlayScene implements GestureHandlers {
     } else {
       target = { ...this.trayOrigin(d.id), k: tray.cell };
     }
-
-    this.flights.set(d.id, flight);
-    this.tweens.animate(flight, { ...target, lift: 0 }, {
-      duration: ms,
-      ease: easing.easeOutCubic,
-      onComplete: () => void this.flights.delete(d.id),
-    });
+    this.fly(d.id, from, target, ms);
 
     if (changed) {
       if (this.game.isComplete()) this.events?.complete();
       else this.events?.change();
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // 按钮：重来、提示
+  // -------------------------------------------------------------------------
+
+  private buttonAt(x: number, y: number): ButtonKind | null {
+    const { buttons } = this.layout;
+    if (contains(buttons.restart, x, y)) return 'restart';
+    if (contains(buttons.hint, x, y)) return 'hint';
+    if (contains(buttons.skip, x, y)) return 'skip';
+    return null;
+  }
+
+  /**
+   * 重来：箱子里的物品全部飞回托盘。朝向和提示次数保留（见 Game.reset）。
+   * 箱子里本来就是空的，什么都没变，不通知外面（不然白白存一次档）。
+   */
+  restart(): void {
+    const moved = this.game.pieces.filter((p) => p.pos).map((p) => ({ id: p.id, from: this.geometry(p.id) }));
+    this.clearAnimations();
+    this.game.reset();
+    for (const m of moved) this.fly(m.id, { ...m.from, lift: 0 }, this.trayGeometry(m.id), RETURN_MS);
+    if (moved.length > 0) this.events?.change();
+  }
+
+  /**
+   * 提示：按答案摆好一件物品。摆好的那件从原来的地方飞过去，被它挤开的飞回托盘。
+   * 返回有没有摆（所有物品都摆对了就没有可摆的）。
+   */
+  applyHint(): boolean {
+    const before = new Map(this.game.pieces.map((p) => [p.id, this.geometry(p.id)]));
+    const result = this.game.hint();
+    if (!result) return false;
+    this.clearAnimations();
+
+    const { board } = this.layout;
+    const placed = this.game.pieces[result.id];
+    const o = placed?.item.orients[placed.oi];
+    const origin = before.get(result.id);
+    if (placed?.pos && o && origin) {
+      // 提示可能把物品转到答案的朝向：起点按旧位置的中心、新朝向的大小算，这样不会在起跳时突然换形状
+      const from = { x: origin.cx - (o.w * origin.k) / 2, y: origin.cy - (o.h * origin.k) / 2, k: origin.k, lift: 0 };
+      this.fly(result.id, from, { x: board.grid.x + placed.pos.c * board.cell, y: board.grid.y + placed.pos.r * board.cell, k: board.cell }, HINT_MS);
+    }
+    for (const id of result.kicked) {
+      const o2 = before.get(id);
+      const kicked = this.game.pieces[id]?.item.orients[this.game.pieces[id]?.oi ?? 0];
+      if (!o2 || !kicked) continue;
+      this.fly(id, { x: o2.cx - (kicked.w * o2.k) / 2, y: o2.cy - (kicked.h * o2.k) / 2, k: o2.k, lift: 0 }, this.trayGeometry(id), RETURN_MS);
+    }
+
+    if (this.game.isComplete()) this.events?.complete();
+    else this.events?.change();
+    return true;
+  }
+
+  /** 物品现在的中心和一格多大：在箱子里按箱子算，在托盘里按托盘算 */
+  private geometry(id: number): { cx: number; cy: number; k: number; x: number; y: number } {
+    const piece = this.game.pieces[id];
+    const o = piece?.item.orients[piece.oi];
+    const { board, tray } = this.layout;
+    if (!piece || !o) return { cx: 0, cy: 0, k: tray.cell, x: 0, y: 0 };
+    const k = piece.pos ? board.cell : tray.cell;
+    const o0 = piece.pos
+      ? { x: board.grid.x + piece.pos.c * board.cell, y: board.grid.y + piece.pos.r * board.cell }
+      : this.trayOrigin(id);
+    return { cx: o0.x + (o.w * k) / 2, cy: o0.y + (o.h * k) / 2, k, x: o0.x, y: o0.y };
+  }
+
+  /** 物品回到托盘时的位置和大小（按现在的朝向） */
+  private trayGeometry(id: number): { x: number; y: number; k: number } {
+    return { ...this.trayOrigin(id), k: this.layout.tray.cell };
+  }
+
+  /** 让物品从 from 飞到 target。飞的时候它不在原来的地方画，飞完才算落下 */
+  private fly(
+    id: number,
+    from: { x: number; y: number; k: number; lift: number },
+    target: { x: number; y: number; k: number },
+    ms: number,
+  ): void {
+    this.spins.get(id)?.handle?.cancel();
+    this.spins.delete(id);
+    this.shakes.get(id)?.handle?.cancel();
+    this.shakes.delete(id);
+    const flight: Flight = { ...from };
+    this.flights.set(id, flight);
+    this.tweens.animate(flight, { ...target, lift: 0 }, {
+      duration: ms,
+      ease: easing.easeOutCubic,
+      onComplete: () => void this.flights.delete(id),
+    });
+  }
+
+  /** 状态要整个换掉（重来、提示）时，先停掉正在播的动画，免得旧的动画落在新的状态上 */
+  private clearAnimations(): void {
+    this.tweens.cancelAll();
+    this.flights.clear();
+    this.spins.clear();
+    this.shakes.clear();
+    this.dragged = null;
+    this.pickup = null;
   }
 
   // -------------------------------------------------------------------------

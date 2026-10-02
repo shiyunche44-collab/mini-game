@@ -95,11 +95,8 @@ export function createWebPlatform(canvas: HTMLCanvasElement): Platform {
     },
 
     ads: {
-      // 模拟广告：直接当作看完 / 展示完。弹层版本在 3.4 做。
-      rewarded(placement: RewardedPlacement): Promise<boolean> {
-        console.info(`[模拟广告] 激励视频：${placement}，视为看完`);
-        return Promise.resolve(true);
-      },
+      // 模拟广告：激励视频有弹层（倒计时之后才能领奖，可以提前关闭）；插屏只打日志，直接当作展示完
+      rewarded: showMockRewarded,
       interstitial(placement: InterstitialPlacement): Promise<void> {
         console.info(`[模拟广告] 插屏：${placement}`);
         return Promise.resolve();
@@ -127,4 +124,105 @@ export function createWebPlatform(canvas: HTMLCanvasElement): Platform {
       console.debug('[埋点]', event, params ?? {});
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// 模拟激励视频
+// ---------------------------------------------------------------------------
+
+/** 模拟广告要"播"多久（秒）。真广告通常 15～30 秒，这里只是让玩家体验一下"要等一会儿才给"的流程 */
+const MOCK_AD_SECONDS = 3;
+
+const REWARD_TEXT: Record<RewardedPlacement, string> = {
+  hint: '获得一次提示',
+  skip: '跳过这一关',
+};
+
+/** 同一时间只会有一个广告。已经有一个在播时再请求，当作没广告：返回 false，和接口约定一致 */
+let adOpen = false;
+
+/**
+ * 全屏弹层：暗幕里一张卡片，倒计时结束才出现"领取奖励"，右上角的 ✕ 随时可以关。
+ * 领取返回 true，提前关闭返回 false。节点上的 data-* 是给浏览器测试找按钮用的。
+ */
+function showMockRewarded(placement: RewardedPlacement): Promise<boolean> {
+  if (adOpen) return Promise.resolve(false);
+  adOpen = true;
+
+  return new Promise<boolean>((resolve) => {
+    const el = <K extends keyof HTMLElementTagNameMap>(tag: K, css: string, text = ''): HTMLElementTagNameMap[K] => {
+      const node = document.createElement(tag);
+      node.style.cssText = css;
+      node.textContent = text;
+      return node;
+    };
+    const font = '-apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+
+    const root = el(
+      'div',
+      `position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;
+       background:rgba(40,28,20,.72);font-family:${font};touch-action:none;user-select:none;-webkit-user-select:none`,
+    );
+    root.dataset.mockAd = 'rewarded';
+    const card = el(
+      'div',
+      `position:relative;width:min(300px,84vw);padding:28px 20px 22px;border-radius:20px;background:#fffdf8;
+       text-align:center;color:#4a3728;box-shadow:0 12px 40px rgba(0,0,0,.4)`,
+    );
+    const close = el(
+      'button',
+      `position:absolute;top:8px;right:8px;width:36px;height:36px;border:0;border-radius:18px;background:#f0e4d2;
+       color:#8a7461;font-size:18px;line-height:36px;cursor:pointer`,
+      '✕',
+    );
+    close.dataset.action = 'close';
+    close.setAttribute('aria-label', '关闭广告');
+    const title = el('div', 'font-size:13px;color:#8a7461;letter-spacing:1px', '模拟广告（广告位还没开通）');
+    const icon = el('div', 'font-size:48px;margin:14px 0 6px', '📺');
+    const reward = el('div', 'font-size:18px;font-weight:700', REWARD_TEXT[placement]);
+    const hint = el('div', 'font-size:13px;color:#8a7461;margin-top:6px;min-height:18px');
+    const claim = el(
+      'button',
+      `margin-top:16px;width:100%;height:46px;border:0;border-radius:23px;font-size:17px;font-weight:700;
+       background:#d9ccbc;color:#fff;cursor:default`,
+    );
+    claim.dataset.action = 'claim';
+    claim.disabled = true;
+
+    card.append(close, title, icon, reward, hint, claim);
+    root.append(card);
+
+    let left = MOCK_AD_SECONDS;
+    let timer = 0;
+    const finish = (watched: boolean): void => {
+      window.clearInterval(timer);
+      root.remove();
+      adOpen = false;
+      resolve(watched);
+    };
+    const render = (): void => {
+      if (left > 0) {
+        hint.textContent = `看完才能领取，提前关闭拿不到奖励`;
+        claim.textContent = `${left} 秒后可领取`;
+      } else {
+        hint.textContent = '看完了，领取奖励吧';
+        claim.textContent = '领取奖励';
+        claim.disabled = false;
+        claim.style.background = '#e8604c';
+        claim.style.cursor = 'pointer';
+      }
+    };
+    render();
+    timer = window.setInterval(() => {
+      left = Math.max(0, left - 1);
+      render();
+      if (left === 0) window.clearInterval(timer);
+    }, 1000);
+
+    close.addEventListener('click', () => finish(false));
+    claim.addEventListener('click', () => {
+      if (left === 0) finish(true);
+    });
+    document.body.append(root);
+  });
 }
