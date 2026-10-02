@@ -204,3 +204,14 @@ export function packTray(
   }
   return null;
 }
+
+export function contains(rect: Rect, x: number, y: number): boolean {
+  return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
+}
+
+/** 屏幕上的点落在箱子的哪一格；不在格子区域里返回 null */
+export function boardCellAt(layout: Layout, x: number, y: number): { r: number; c: number } | null {
+  const { grid, cell } = layout.board;
+  if (!contains(grid, x, y)) return null;
+  return { r: Math.floor((y - grid.y) / cell), c: Math.floor((x - grid.x) / cell) };
+}

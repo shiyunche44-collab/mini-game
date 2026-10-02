@@ -3,8 +3,16 @@ import type { Canvas2D } from '../platform/types.ts';
 
 /** 只描出圆角矩形的路径，不填充也不描边；调用方接着 fill() 或 stroke()。半径过大时按短边的一半算。 */
 export function roundRectPath(ctx: Canvas2D, x: number, y: number, w: number, h: number, radius: number): void {
-  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
   ctx.beginPath();
+  addRoundRect(ctx, x, y, w, h, radius);
+}
+
+/**
+ * 在当前路径里加一个圆角矩形的子路径，不重新开始路径。几个子路径一起 fill() 是它们的并集，
+ * 需要把好几块当成一个整体填充（比如给一件由几格拼成的物品投一次影子）时用。
+ */
+export function addRoundRect(ctx: Canvas2D, x: number, y: number, w: number, h: number, radius: number): void {
+  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r);

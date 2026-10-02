@@ -2,6 +2,7 @@
 import { Game } from '../core/game.ts';
 import { generateLevel } from '../core/levels.ts';
 import { loadProgress, SAVE_KEY } from '../core/progress.ts';
+import { createGestureRecognizer } from '../engine/input.ts';
 import { Loop } from '../engine/loop.ts';
 import type { Platform } from '../platform/types.ts';
 import { PlayScene } from './PlayScene.ts';
@@ -20,8 +21,9 @@ export function startGame(platform: Platform, options: StartOptions = {}): Loop 
   for (let i = 0; i < (options.hints ?? 0); i++) game.hint();
 
   const scene = new PlayScene(platform, game);
+  platform.onPointer(createGestureRecognizer(() => platform.now(), scene));
   const loop = new Loop(platform, {
-    update: () => {},
+    update: (dt) => scene.update(dt),
     render: () => scene.render(),
   });
   loop.start();

@@ -39,6 +39,16 @@ describe('FakePlatform：画布', () => {
     assert.equal(p.ctx.lineWidth, 1);
   });
 
+  it('save / restore 也恢复影子，调用记录里能看到当时的影子', () => {
+    const p = new FakePlatform();
+    p.ctx.save();
+    p.ctx.shadowBlur = 8;
+    p.ctx.fillRect(0, 0, 1, 1);
+    p.ctx.restore();
+    assert.equal(p.ctx.calls[1]?.style.shadowBlur, 8);
+    assert.equal(p.ctx.shadowBlur, 0);
+  });
+
   it('多余的 restore 不会让层数变成负数', () => {
     const p = new FakePlatform();
     p.ctx.restore();
@@ -161,6 +171,19 @@ describe('FakePlatform：时间', () => {
       return times;
     };
     assert.deepEqual(run([200]), run([50, 50, 50, 50]));
+  });
+
+  it('时间不对齐帧点时，每次 advance(FRAME_MS) 也恰好运行一帧，不会因为浮点误差漏掉', () => {
+    const p = new FakePlatform();
+    p.advance(100); // 不是帧点的整数倍
+    let frames = 0;
+    const again = (): void => {
+      frames++;
+      p.requestFrame(again);
+    };
+    p.requestFrame(again);
+    for (let i = 0; i < 60; i++) p.advance(FRAME);
+    assert.equal(frames, 60);
   });
 
   it('advance 不接受负数', () => {

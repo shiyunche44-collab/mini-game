@@ -1,15 +1,64 @@
-// 一局游戏的画面：背景、行李牌、箱子、托盘、按钮。现在只读 Game 的状态来画，不处理输入（3.1 起加）。
+// 一局游戏的画面和拖动交互：背景、行李牌、箱子、托盘、按钮；把物品从托盘拖进箱子。
+//
+// 拖动的规则：
+// - 手指按在物品上拖动，物品放大到箱子里的大小、抬高（影子加上移），跟着手指走
+// - 拖到箱子上方、有放得下的位置时，在那个位置画一个半透明的预览（吸附）
+// - 松手：有吸附位置就落进去；没有就飞回去。从托盘拿起的回托盘，从箱子里拿起的回原来的位置；
+//   从箱子里拿起、松手在托盘上的，退回托盘
+// - 拖动期间 Game 的状态不动，松手那一刻才改，所以拖到一半被打断（来电、系统手势）什么都不会丢
 import type { Game } from '../core/game.ts';
 import { fillRoundRect, roundRectPath, strokeRoundRect } from '../engine/draw.ts';
+import type { DragEvent, GestureHandlers } from '../engine/input.ts';
+import { easing, Tweens } from '../engine/tween.ts';
 import type { Platform } from '../platform/types.ts';
-import { computeLayout, type Layout, type Rect } from './layout.ts';
-import { drawPiece } from './pieceView.ts';
+import { boardCellAt, computeLayout, contains, type Layout, type Rect } from './layout.ts';
+import { drawPiece, drawPieceGhost } from './pieceView.ts';
+import { findSnap, type Snap } from './snap.ts';
 import { EMOJI_FONT, FONT, theme } from './theme.ts';
 
-export class PlayScene {
+/** 手指拿着物品时，物品比手指高出多少（单位：箱子里的格）：不然手指把物品遮住了，看不见要放哪 */
+export const LIFT_CELLS = 0.7;
+/** 拿起来的影子有多深（单位：箱子里的格） */
+const SHADOW_CELLS = 0.3;
+const PICKUP_MS = 110;
+const DROP_MS = 130;
+const RETURN_MS = 240;
+const GHOST_ALPHA = 0.5;
+
+/** 正被手指拿着的物品 */
+interface Dragged {
+  readonly id: number;
+  /** 从箱子里拿起的：原来的位置；从托盘拿起的是 null */
+  readonly from: Snap | null;
+  /** 抓住物品的哪一点，占物品外框宽、高的比例。物品放大时这一点始终在手指下面 */
+  readonly fx: number;
+  readonly fy: number;
+  /** 拿起来之前，物品一格有多大 */
+  readonly fromCell: number;
+  /** 手指现在的位置 */
+  x: number;
+  y: number;
+  /** 拿起的进度 0～1：大小、抬高、影子都跟着它变 */
+  t: number;
+  snap: Snap | null;
+}
+
+/** 正在飞向落点的物品（落进箱子，或者飞回去）。x、y 是它外框的左上角，k 是一格多大 */
+interface Flight {
+  x: number;
+  y: number;
+  k: number;
+  lift: number;
+}
+
+export class PlayScene implements GestureHandlers {
   private readonly platform: Pick<Platform, 'ctx' | 'screen'>;
   readonly game: Game;
   readonly layout: Layout;
+  private readonly tweens = new Tweens();
+  private dragged: Dragged | null = null;
+  private pickup: { cancel(): void } | null = null;
+  private readonly flights = new Map<number, Flight>();
 
   constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game) {
     this.platform = platform;
@@ -17,14 +66,199 @@ export class PlayScene {
     this.layout = computeLayout(platform.screen, game.level);
   }
 
+  /** 推进动画。dtMs 是主循环给的帧间隔 */
+  update(dtMs: number): void {
+    this.tweens.update(dtMs);
+  }
+
   render(): void {
     const { ctx } = this.platform;
+    // 被拿着的、正在飞的物品不在原位置画：它们由下面单独画
+    const away = new Set<number>(this.flights.keys());
+    if (this.dragged) away.add(this.dragged.id);
+
     this.drawBackground();
     this.drawHeader(ctx);
     this.drawTip(ctx);
-    this.drawBoard(ctx);
-    this.drawTray(ctx);
+    this.drawBoard(ctx, away);
+    this.drawTray(ctx, away);
     this.drawButtons(ctx);
+    this.drawGhost(ctx);
+    for (const [id, f] of this.flights) this.drawPieceAt(ctx, id, f.x, f.y, f.k, f.lift);
+    if (this.dragged) this.drawDragged(ctx, this.dragged);
+  }
+
+  // -------------------------------------------------------------------------
+  // 手势
+  // -------------------------------------------------------------------------
+
+  tap(): void {
+    // 点按旋转在 3.2 做
+  }
+
+  dragStart(e: DragEvent): void {
+    this.dropDragged(null); // 上一次拖动没收尾（不该发生）就先收掉
+    const id = this.pieceAtPoint(e.startX, e.startY);
+    if (id === null) return;
+    const piece = this.game.pieces[id];
+    const o = piece?.item.orients[piece.oi];
+    if (!piece || !o) return;
+
+    const { board, tray } = this.layout;
+    const from = piece.pos ? { r: piece.pos.r, c: piece.pos.c } : null;
+    const fromCell = from ? board.cell : tray.cell;
+    const origin = from
+      ? { x: board.grid.x + from.c * board.cell, y: board.grid.y + from.r * board.cell }
+      : this.trayOrigin(id);
+    // 托盘里按的可能是物品位置里的空白处，所以把抓的点限制在物品的外框里
+    const fx = clamp01((e.startX - origin.x) / (o.w * fromCell));
+    const fy = clamp01((e.startY - origin.y) / (o.h * fromCell));
+
+    const d: Dragged = { id, from, fx, fy, fromCell, x: e.x, y: e.y, t: from ? 1 : 0, snap: null };
+    d.snap = this.snapFor(d);
+    this.dragged = d;
+    this.pickup = from ? null : this.tweens.animate(d, { t: 1 }, { duration: PICKUP_MS, ease: easing.easeOutQuad });
+  }
+
+  dragMove(e: DragEvent): void {
+    const d = this.dragged;
+    if (!d) return;
+    d.x = e.x;
+    d.y = e.y;
+    d.snap = this.snapFor(d);
+  }
+
+  dragEnd(e: DragEvent): void {
+    const d = this.dragged;
+    if (!d) return;
+    d.x = e.x;
+    d.y = e.y;
+    d.snap = this.snapFor(d);
+    this.dropDragged(contains(this.layout.tray.panel, e.x, e.y) ? 'tray' : 'board');
+  }
+
+  dragCancel(): void {
+    this.dropDragged(null);
+  }
+
+  /**
+   * 手指松开，决定物品去哪。where 是松手的地方；null 表示被打断，直接飞回去。
+   * 状态在这里才改。
+   */
+  private dropDragged(where: 'board' | 'tray' | null): void {
+    const d = this.dragged;
+    if (!d) return;
+    this.dragged = null;
+    this.pickup?.cancel();
+    this.pickup = null;
+
+    const { board, tray } = this.layout;
+    const k = this.dragCell(d);
+    const start = this.dragOrigin(d, k);
+    const flight: Flight = { x: start.x, y: start.y, k, lift: this.dragLift(d) };
+
+    let target: { x: number; y: number; k: number };
+    let ms = RETURN_MS;
+    if (where !== null && d.snap && this.game.place(d.id, d.snap.r, d.snap.c)) {
+      target = { x: board.grid.x + d.snap.c * board.cell, y: board.grid.y + d.snap.r * board.cell, k: board.cell };
+      ms = DROP_MS;
+    } else if (where === 'tray' && d.from) {
+      this.game.remove(d.id);
+      target = { ...this.trayOrigin(d.id), k: tray.cell };
+    } else if (d.from) {
+      target = { x: board.grid.x + d.from.c * board.cell, y: board.grid.y + d.from.r * board.cell, k: board.cell };
+    } else {
+      target = { ...this.trayOrigin(d.id), k: tray.cell };
+    }
+
+    this.flights.set(d.id, flight);
+    this.tweens.animate(flight, { ...target, lift: 0 }, {
+      duration: ms,
+      ease: easing.easeOutCubic,
+      onComplete: () => void this.flights.delete(d.id),
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 拖动的几何
+  // -------------------------------------------------------------------------
+
+  /** 屏幕上这个点按住的是哪件物品：箱子里的按格子找，托盘里的按它的位置找。正在飞的碰不到 */
+  private pieceAtPoint(x: number, y: number): number | null {
+    const cell = boardCellAt(this.layout, x, y);
+    if (cell) {
+      const id = this.game.pieceAt(cell.r, cell.c);
+      return id !== null && !this.flights.has(id) ? id : null;
+    }
+    for (const p of this.game.pieces) {
+      const slot = this.layout.tray.slots[p.id];
+      if (!p.pos && slot && !this.flights.has(p.id) && contains(slot, x, y)) return p.id;
+    }
+    return null;
+  }
+
+  /** 物品在托盘里时外框左上角在哪（在自己的正方形位置里居中） */
+  private trayOrigin(id: number): { x: number; y: number } {
+    const piece = this.game.pieces[id];
+    const o = piece?.item.orients[piece.oi];
+    const slot = this.layout.tray.slots[id];
+    if (!o || !slot) return { x: 0, y: 0 };
+    const t = this.layout.tray.cell;
+    return { x: slot.x + (slot.w - o.w * t) / 2, y: slot.y + (slot.h - o.h * t) / 2 };
+  }
+
+  /** 拿起时一格有多大：从原来的大小渐渐放大到箱子里的大小 */
+  private dragCell(d: Dragged): number {
+    return d.fromCell + (this.layout.board.cell - d.fromCell) * d.t;
+  }
+
+  private dragLift(d: Dragged): number {
+    return SHADOW_CELLS * this.layout.board.cell * d.t;
+  }
+
+  /** 物品外框的左上角：抓的那一点在手指上方一点 */
+  private dragOrigin(d: Dragged, k: number): { x: number; y: number } {
+    const o = this.game.pieces[d.id]?.item.orients[this.game.pieces[d.id]?.oi ?? 0];
+    if (!o) return { x: d.x, y: d.y };
+    return {
+      x: d.x - d.fx * o.w * k,
+      y: d.y - d.fy * o.h * k - LIFT_CELLS * this.layout.board.cell * d.t,
+    };
+  }
+
+  /**
+   * 现在松手会落在哪。按拿起完成之后的大小和高度算，不按动画中间的值算，
+   * 这样手很快时（还没放大完就松手）结果也一样。
+   */
+  private snapFor(d: Dragged): Snap | null {
+    const { board } = this.layout;
+    const full = { ...d, t: 1 };
+    const origin = this.dragOrigin(full, board.cell);
+    return findSnap(this.game, d.id, (origin.y - board.grid.y) / board.cell, (origin.x - board.grid.x) / board.cell);
+  }
+
+  // -------------------------------------------------------------------------
+  // 画被拿着的物品
+  // -------------------------------------------------------------------------
+
+  private drawPieceAt(ctx: Platform['ctx'], id: number, x: number, y: number, k: number, lift: number): void {
+    const piece = this.game.pieces[id];
+    if (piece) drawPiece(ctx, piece, x, y, k, lift);
+  }
+
+  private drawDragged(ctx: Platform['ctx'], d: Dragged): void {
+    const k = this.dragCell(d);
+    const o = this.dragOrigin(d, k);
+    this.drawPieceAt(ctx, d.id, o.x, o.y, k, this.dragLift(d));
+  }
+
+  /** 吸附预览：在会落下的位置画一个半透明的物品 */
+  private drawGhost(ctx: Platform['ctx']): void {
+    const d = this.dragged;
+    const piece = d && this.game.pieces[d.id];
+    if (!d?.snap || !piece) return;
+    const { board } = this.layout;
+    drawPieceGhost(ctx, piece, board.grid.x + d.snap.c * board.cell, board.grid.y + d.snap.r * board.cell, board.cell, GHOST_ALPHA);
   }
 
   private drawBackground(): void {
@@ -92,7 +326,7 @@ export class PlayScene {
     ctx.fillText(this.game.level.tip, tip.x + tip.w / 2, tip.y + tip.h / 2, tip.w);
   }
 
-  private drawBoard(ctx: Platform['ctx']): void {
+  private drawBoard(ctx: Platform['ctx'], away: ReadonlySet<number>): void {
     const { frame, handle, grid, cell } = this.layout.board;
     const { level } = this.game;
 
@@ -124,19 +358,19 @@ export class PlayScene {
     }
 
     for (const p of this.game.pieces) {
-      if (p.pos) drawPiece(ctx, p, grid.x + p.pos.c * cell, grid.y + p.pos.r * cell, cell);
+      if (p.pos && !away.has(p.id)) drawPiece(ctx, p, grid.x + p.pos.c * cell, grid.y + p.pos.r * cell, cell);
     }
   }
 
-  private drawTray(ctx: Platform['ctx']): void {
+  private drawTray(ctx: Platform['ctx'], away: ReadonlySet<number>): void {
     const { panel, slots, cell } = this.layout.tray;
     fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 16, theme.trayFill);
     strokeRoundRect(ctx, panel.x + 0.5, panel.y + 0.5, panel.w - 1, panel.h - 1, 16, theme.trayLine, 1.5);
 
     for (const p of this.game.pieces) {
       const slot = slots[p.id] as Rect;
-      if (p.pos) {
-        // 已经在箱子里：留一个浅浅的虚线框，托盘里别的物品不会因此换位置
+      if (p.pos || away.has(p.id)) {
+        // 已经在箱子里、或者被拿走了：留一个浅浅的虚线框，托盘里别的物品不会因此换位置
         ctx.save();
         ctx.setLineDash([4, 4]);
         strokeRoundRect(ctx, slot.x, slot.y, slot.w, slot.h, cell * 0.25, theme.trayLine, 1.5);
@@ -193,4 +427,8 @@ export class PlayScene {
       ctx.fillText('广告', bx, by + 0.5, 16);
     }
   }
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
 }

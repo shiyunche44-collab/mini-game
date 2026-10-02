@@ -30,6 +30,7 @@ export interface StyleSnapshot {
   lineWidth: number;
   globalAlpha: number;
   font: string;
+  shadowBlur: number;
 }
 
 export interface DrawCall {
@@ -78,6 +79,7 @@ export class FakeCanvas2D implements Canvas2D {
       lineWidth: this.lineWidth,
       globalAlpha: this.globalAlpha,
       font: this.font,
+      shadowBlur: this.shadowBlur,
     };
   }
 
@@ -110,6 +112,7 @@ export class FakeCanvas2D implements Canvas2D {
     this.lineWidth = s.lineWidth;
     this.globalAlpha = s.globalAlpha;
     this.font = s.font;
+    this.shadowBlur = s.shadowBlur;
   }
 
   scale(x: number, y: number): void {
@@ -296,14 +299,15 @@ export class FakePlatform implements Platform {
     const end = this.elapsed + ms;
     for (;;) {
       const nextFrameAt = (this.frameIndex + 1) * FakePlatform.FRAME_MS;
-      if (nextFrameAt > end) break;
+      // 容差：时间不对齐帧点时，advance(FRAME_MS) 的终点和下一个帧点只差浮点误差，不能因此漏掉这一帧
+      if (nextFrameAt > end + 1e-9) break;
       this.frameIndex++;
       this.elapsed = nextFrameAt;
       const cbs = this.frameCbs;
       this.frameCbs = [];
       for (const cb of cbs) cb(nextFrameAt);
     }
-    this.elapsed = end;
+    this.elapsed = Math.max(this.elapsed, end);
   }
 
   // ---- 存储：存进去的东西会过一遍 JSON，和真实平台一样，取出来的是副本 ----
