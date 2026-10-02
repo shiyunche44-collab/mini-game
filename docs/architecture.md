@@ -34,7 +34,7 @@ entry → 平台实现 → platform/types.ts
 
 - **业务层**（core、engine、game、platform/types.ts）不能直接使用运行环境的全局对象：`wx`、`tt`、`GameGlobal`、`window`、`document`、`navigator`、`localStorage`、`sessionStorage`、`globalThis`。局部变量也不用这些名字。业务层也不能写 `/// <reference>`。
 - 平台实现之间不互相引用，入口之间也不互相引用。每个入口单独打包成一个平台的产物；入口共用的启动逻辑放进 game。
-- `src` 里不能引用 npm 包、node 内置模块，也不能引用 `src` 以外的文件（test、tools、drafts）。
+- `src` 里不能引用 npm 包、node 内置模块，也不能引用 `src` 以外的文件（test、tools）。
 - `src` 里只写 `.ts` 文件，每个文件都要放在某一层里。
 - 所有写法的引用都算，包括 `import type`、`export from`、`import()`、`typeof import()`。
 
@@ -44,7 +44,7 @@ entry → 平台实现 → platform/types.ts
 
 ```
 src/
-  core/      rng.ts  items.ts  levels.ts  game.ts  progress.ts
+  core/      rng.ts ✓  items.ts ✓  levels.ts ✓  game.ts ✓  progress.ts ✓
   engine/    loop.ts  tween.ts  input.ts  draw.ts
   game/      PlayScene.ts  WinOverlay.ts  pieceView.ts  layout.ts  theme.ts  start.ts
   platform/  types.ts ✓  canvas-compat.check.ts ✓  web.ts  wechat.ts  douyin.ts  tt.d.ts
@@ -53,7 +53,6 @@ test/        fake-platform.ts ✓、core 单测、game 层在假平台上的测�
 tools/       typecheck.mjs ✓  check-arch.mjs ✓  check.mjs ✓  levels-preview.mjs ✓  build.mjs  check-size.mjs
 platforms/   wechat/ 和 douyin/ 的 game.json、project.config.json 模板
 docs/        architecture.md  design.md  roadmap.md  backlog.md  adr/
-drafts/      上一版 JS 草稿，只作参考，1.5 完成后删除
 ```
 
 ## 平台接口
