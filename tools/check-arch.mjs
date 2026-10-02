@@ -1,4 +1,5 @@
 // 架构检查：按分层规则检查 src/ 里每个文件引用了谁、用了哪些全局对象。
+// 规则的说明见 docs/architecture.md，来由见 docs/adr/0002-layering.md。改规则要先写 ADR，三处一起改。
 // 分层 tsconfig 拦的是"用了不该有的类型库"，这里拦的是"绕开分层"：
 //   - import 方向（含 import type、export from、import()、typeof import()、require）
 //   - 引用 npm 包、node 内置模块、src 以外的文件
