@@ -1,0 +1,18 @@
+{
+  // 所有分层共用的编译选项。各层在自己目录的 tsconfig.json 里决定带哪些类型库。
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    // 测试直接用 node 跑 .ts（类型擦除），所以只允许可擦除的语法，并且 import 要带 .ts 后缀
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true
+  }
+}
