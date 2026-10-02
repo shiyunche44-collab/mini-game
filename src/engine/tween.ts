@@ -23,6 +23,19 @@ export const easing = {
   }) as Easing,
 };
 
+/**
+ * 来回摆动的三角波：t 从 0 到 1 走完 cycles 个来回，起点和终点都是 0，值在 -1～1 之间。
+ * 做"抖一下"的动画用：位移 = 幅度 × (1 - t) × wave(t, 3)，越抖越小。
+ * 用折线代替 sin：和上面的缓动一样只用加减乘除，每个设备算出的结果都一样。
+ */
+export function wave(t: number, cycles: number): number {
+  const f = t * cycles;
+  const phase = f - Math.floor(f);
+  if (phase < 0.25) return phase * 4;
+  if (phase < 0.75) return 2 - phase * 4;
+  return phase * 4 - 4;
+}
+
 export interface TweenOptions {
   /** 毫秒，≤ 0 表示下一次 update 就结束 */
   duration: number;

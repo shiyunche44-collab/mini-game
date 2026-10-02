@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { easing, Tweens } from '../src/engine/tween.ts';
+import { easing, Tweens, wave } from '../src/engine/tween.ts';
 
 function near(actual: number, expected: number): void {
   assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} 应该约等于 ${expected}`);
@@ -22,6 +22,28 @@ describe('easing：缓动函数', () => {
 
   it('easeOutBack 中途会冲过 1 再回来', () => {
     assert.ok(easing.easeOutBack(0.7) > 1);
+  });
+});
+
+describe('wave：来回摆动的三角波', () => {
+  it('起点和终点都是 0，每个来回先到 1 再到 -1', () => {
+    near(wave(0, 3), 0);
+    near(wave(1, 3), 0);
+    near(wave(1 / 12, 3), 1); // 3 个来回，每个 1/3，四分之一处是波峰
+    near(wave(3 / 12, 3), -1);
+    near(wave(0.5, 1), 0);
+    near(wave(0.25, 1), 1);
+    near(wave(0.75, 1), -1);
+  });
+
+  it('一直在 -1～1 之间，是连续的折线', () => {
+    let prev = wave(0, 3);
+    for (let i = 1; i <= 1000; i++) {
+      const v = wave(i / 1000, 3);
+      assert.ok(v >= -1 - 1e-9 && v <= 1 + 1e-9);
+      assert.ok(Math.abs(v - prev) < 0.05, `第 ${i} 步跳变了 ${Math.abs(v - prev)}`);
+      prev = v;
+    }
   });
 });
 

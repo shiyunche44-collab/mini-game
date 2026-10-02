@@ -1,77 +1,27 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { Game } from '../src/core/game.ts';
-import { generateLevel } from '../src/core/levels.ts';
-import { createGestureRecognizer } from '../src/engine/input.ts';
-import { Loop } from '../src/engine/loop.ts';
-import { PlayScene, LIFT_CELLS } from '../src/game/PlayScene.ts';
+import { LIFT_CELLS } from '../src/game/PlayScene.ts';
 import { startGame } from '../src/game/start.ts';
-import { FakePlatform, type DrawCall } from './fake-platform.ts';
-
-const FRAME = FakePlatform.FRAME_MS;
+import { FakePlatform } from './fake-platform.ts';
+import {
+  dragIn,
+  emojiCalls,
+  emojiPos,
+  FRAME,
+  fingerFor,
+  fontSize,
+  frame,
+  grabInTray,
+  setup,
+  trayOrigin,
+  type Ctx,
+} from './play-helpers.ts';
 
 // 第 1 关：4 列 3 行，托盘顺序  0 登山靴（L，3 格）  1 帽子（1×2）  2 登山靴  3 书（2×2）。不能旋转。
 // 答案：书 (0,0)，帽子 (2,0)，靴 0 在 (1,2)，靴 2 在 (0,2)。
 const BOOT_A = 0;
 const CAP = 1;
-const BOOT_C = 2;
 const BOOKS = 3;
-
-function setup(n = 1) {
-  const p = new FakePlatform();
-  const game = new Game(generateLevel(n));
-  const scene = new PlayScene(p, game);
-  p.onPointer(createGestureRecognizer(() => p.now(), scene));
-  new Loop(p, { update: (dt) => scene.update(dt), render: () => scene.render() }).start();
-  p.advance(FRAME);
-  return { p, game, scene };
-}
-type Ctx = ReturnType<typeof setup>;
-
-/** 物品在托盘里时外框的左上角 */
-function trayOrigin({ game, scene }: Ctx, id: number) {
-  const o = game.pieces[id]?.item.orients[game.pieces[id]?.oi ?? 0];
-  const slot = scene.layout.tray.slots[id];
-  assert.ok(o && slot);
-  const t = scene.layout.tray.cell;
-  return { x: slot.x + (slot.w - o.w * t) / 2, y: slot.y + (slot.h - o.h * t) / 2, o, t };
-}
-
-/** 按在托盘里这件物品第一格的中心。返回按下的点，以及抓的位置占外框宽、高的比例 */
-function grabInTray(ctx: Ctx, id: number) {
-  const { x, y, o, t } = trayOrigin(ctx, id);
-  const [r0, c0] = o.cells[0] ?? [0, 0];
-  const px = x + (c0 + 0.5) * t;
-  const py = y + (r0 + 0.5) * t;
-  return { px, py, fx: (px - x) / (o.w * t), fy: (py - y) / (o.h * t), o };
-}
-
-/** 要让物品外框的左上角落在箱子的 (r, c)（可以是小数），手指应该在哪 */
-function fingerFor(ctx: Ctx, g: { fx: number; fy: number; o: { w: number; h: number } }, r: number, c: number) {
-  const { grid, cell } = ctx.scene.layout.board;
-  return [grid.x + c * cell + g.fx * g.o.w * cell, grid.y + r * cell + g.fy * g.o.h * cell + LIFT_CELLS * cell] as const;
-}
-
-/** 把托盘里的物品拖到箱子的 (r, c)，瞬间完成（手指很快） */
-function dragIn(ctx: Ctx, id: number, r: number, c: number) {
-  const g = grabInTray(ctx, id);
-  const [fx, fy] = fingerFor(ctx, g, r, c);
-  ctx.p.touch.drag([[g.px, g.py], [g.px + 15, g.py], [fx, fy]]);
-}
-
-/** 画一帧，返回这一帧的绘制调用 */
-function frame(p: FakePlatform): DrawCall[] {
-  p.ctx.clearCalls();
-  p.advance(FRAME);
-  return [...p.ctx.calls];
-}
-const emojiCalls = (calls: DrawCall[], emoji: string) => calls.filter((c) => c.op === 'fillText' && c.args[0] === emoji);
-/** 这个 emoji 画在哪。同一帧里画了多个时（预览、手上拿着的），取最后一个，也就是最上面的那个 */
-const emojiPos = (calls: DrawCall[], emoji: string) => {
-  const c = emojiCalls(calls, emoji).at(-1);
-  return c ? ([c.args[1], c.args[2]] as [number, number]) : null;
-};
-const fontSize = (c: DrawCall | undefined) => Number(/(\d+)px/.exec(c?.style.font ?? '')?.[1]);
 
 describe('拖动：把物品拖进箱子', () => {
   it('把书从托盘拖到箱子左上角，放进去了', () => {

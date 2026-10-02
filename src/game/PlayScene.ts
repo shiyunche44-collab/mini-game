@@ -6,10 +6,13 @@
 // - 松手：有吸附位置就落进去；没有就飞回去。从托盘拿起的回托盘，从箱子里拿起的回原来的位置；
 //   从箱子里拿起、松手在托盘上的，退回托盘
 // - 拖动期间 Game 的状态不动，松手那一刻才改，所以拖到一半被打断（来电、系统手势）什么都不会丢
+//
+// 点按旋转：点中物品（托盘里和箱子里都行）顺时针转 90°。转得动就播一段转过去的动画；
+// 箱子里周围没空位转不开，物品左右抖一下，让玩家知道点到了、只是转不了。
 import type { Game } from '../core/game.ts';
 import { fillRoundRect, roundRectPath, strokeRoundRect } from '../engine/draw.ts';
 import type { DragEvent, GestureHandlers } from '../engine/input.ts';
-import { easing, Tweens } from '../engine/tween.ts';
+import { easing, Tweens, wave, type TweenHandle } from '../engine/tween.ts';
 import type { Platform } from '../platform/types.ts';
 import { boardCellAt, computeLayout, contains, type Layout, type Rect } from './layout.ts';
 import { drawPiece, drawPieceGhost } from './pieceView.ts';
@@ -24,6 +27,11 @@ const PICKUP_MS = 110;
 const DROP_MS = 130;
 const RETURN_MS = 240;
 const GHOST_ALPHA = 0.5;
+const SPIN_MS = 190;
+const SHAKE_MS = 300;
+/** 抖动的来回次数，幅度（单位：格）。抖得太大会盖到旁边的物品 */
+const SHAKE_CYCLES = 3;
+export const SHAKE_CELLS = 0.12;
 
 /** 正被手指拿着的物品 */
 interface Dragged {
@@ -51,6 +59,18 @@ interface Flight {
   lift: number;
 }
 
+/** 正在转的物品：angle 是它离最终朝向还差多少弧度，从 -90° 走到 0 */
+interface Spin {
+  angle: number;
+  handle: TweenHandle | null;
+}
+
+/** 正在抖的物品：dx 是它现在偏离原位多少像素 */
+interface Shake {
+  dx: number;
+  handle: TweenHandle | null;
+}
+
 export class PlayScene implements GestureHandlers {
   private readonly platform: Pick<Platform, 'ctx' | 'screen'>;
   readonly game: Game;
@@ -59,6 +79,8 @@ export class PlayScene implements GestureHandlers {
   private dragged: Dragged | null = null;
   private pickup: { cancel(): void } | null = null;
   private readonly flights = new Map<number, Flight>();
+  private readonly spins = new Map<number, Spin>();
+  private readonly shakes = new Map<number, Shake>();
 
   constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game) {
     this.platform = platform;
@@ -92,8 +114,15 @@ export class PlayScene implements GestureHandlers {
   // 手势
   // -------------------------------------------------------------------------
 
-  tap(): void {
-    // 点按旋转在 3.2 做
+  tap(x: number, y: number): void {
+    if (this.dragged) return;
+    const id = this.pieceAtPoint(x, y);
+    const piece = id === null ? undefined : this.game.pieces[id];
+    if (id === null || !piece) return;
+    // 这一关不让转，或者怎么转都是同一个形状（2×2 的书）：没什么可转的，不给反馈
+    if (!this.game.level.rotate || piece.item.orients.length < 2) return;
+    if (this.game.rotate(id)) this.startSpin(id);
+    else this.startShake(id);
   }
 
   dragStart(e: DragEvent): void {
@@ -106,6 +135,11 @@ export class PlayScene implements GestureHandlers {
 
     const { board, tray } = this.layout;
     const from = piece.pos ? { r: piece.pos.r, c: piece.pos.c } : null;
+    // 拿起之前还在转或抖的，不再播了：拿起之后由拖动的画法接管
+    this.spins.get(id)?.handle?.cancel();
+    this.spins.delete(id);
+    this.shakes.get(id)?.handle?.cancel();
+    this.shakes.delete(id);
     const fromCell = from ? board.cell : tray.cell;
     const origin = from
       ? { x: board.grid.x + from.c * board.cell, y: board.grid.y + from.r * board.cell }
@@ -177,6 +211,69 @@ export class PlayScene implements GestureHandlers {
       ease: easing.easeOutCubic,
       onComplete: () => void this.flights.delete(d.id),
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // 旋转和抖动
+  // -------------------------------------------------------------------------
+
+  /**
+   * 状态已经转好了，画面补一段转过去的动画：把转好之后的物品倒着转 90° 画出来，再转回 0。
+   * 连点时接着当前的角度继续转，不会跳回开头。
+   */
+  private startSpin(id: number): void {
+    const prev = this.spins.get(id);
+    prev?.handle?.cancel();
+    const spin: Spin = { angle: (prev?.angle ?? 0) - Math.PI / 2, handle: null };
+    this.spins.set(id, spin);
+    spin.handle = this.tweens.animate(spin, { angle: 0 }, {
+      duration: SPIN_MS,
+      ease: easing.easeOutBack, // 转过头一点再回正，有"咔哒"落位的感觉
+      onComplete: () => {
+        if (this.spins.get(id) === spin) this.spins.delete(id);
+      },
+    });
+  }
+
+  private startShake(id: number): void {
+    this.shakes.get(id)?.handle?.cancel();
+    const shake: Shake = { dx: 0, handle: null };
+    this.shakes.set(id, shake);
+    const amp = this.layout.board.cell * SHAKE_CELLS;
+    shake.handle = this.tweens.add({
+      duration: SHAKE_MS,
+      onUpdate: (p) => {
+        shake.dx = amp * (1 - p) * wave(p, SHAKE_CYCLES);
+      },
+      onComplete: () => {
+        if (this.shakes.get(id) === shake) this.shakes.delete(id);
+      },
+    });
+  }
+
+  /** 画一件停在托盘或箱子里的物品，带上它正在播的转动和抖动 */
+  private drawResting(ctx: Platform['ctx'], id: number, x: number, y: number, cell: number): void {
+    const piece = this.game.pieces[id];
+    if (!piece) return;
+    const spin = this.spins.get(id);
+    const shake = this.shakes.get(id);
+    if (!spin && !shake) {
+      drawPiece(ctx, piece, x, y, cell);
+      return;
+    }
+    const o = piece.item.orients[piece.oi];
+    ctx.save();
+    if (shake) ctx.translate(shake.dx, 0);
+    if (spin && o) {
+      // 绕外框的中心转
+      const cx = x + (o.w * cell) / 2;
+      const cy = y + (o.h * cell) / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(spin.angle);
+      ctx.translate(-cx, -cy);
+    }
+    drawPiece(ctx, piece, x, y, cell);
+    ctx.restore();
   }
 
   // -------------------------------------------------------------------------
@@ -358,7 +455,7 @@ export class PlayScene implements GestureHandlers {
     }
 
     for (const p of this.game.pieces) {
-      if (p.pos && !away.has(p.id)) drawPiece(ctx, p, grid.x + p.pos.c * cell, grid.y + p.pos.r * cell, cell);
+      if (p.pos && !away.has(p.id)) this.drawResting(ctx, p.id, grid.x + p.pos.c * cell, grid.y + p.pos.r * cell, cell);
     }
   }
 
@@ -380,7 +477,7 @@ export class PlayScene implements GestureHandlers {
       const o = p.item.orients[p.oi];
       if (!o) continue;
       // 在自己的正方形位置里居中
-      drawPiece(ctx, p, slot.x + (slot.w - o.w * cell) / 2, slot.y + (slot.h - o.h * cell) / 2, cell);
+      this.drawResting(ctx, p.id, slot.x + (slot.w - o.w * cell) / 2, slot.y + (slot.h - o.h * cell) / 2, cell);
     }
   }
 
