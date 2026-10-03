@@ -90,6 +90,24 @@ export function drawPieceGhost(ctx: Canvas2D, piece: PieceState, x: number, y: n
   ctx.restore();
 }
 
+/**
+ * 提示高亮：在已经摆好的物品上盖一层发光的轮廓。alpha 是亮度，0 时什么都不画。
+ * 整件轮廓一次填充：和预览一样，分格画再叠半透明会出现条纹。
+ */
+export function drawPieceGlow(ctx: Canvas2D, piece: PieceState, x: number, y: number, cell: number, alpha: number, color: string): void {
+  const o = piece.item.orients[piece.oi];
+  if (!o || alpha <= 0) return;
+  ctx.save();
+  // 最亮时也留着一部分透明，不把物品上的 emoji 盖住
+  ctx.globalAlpha = Math.min(1, alpha) * 0.6;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = cell * 0.8;
+  outlinePath(ctx, o, x, y, cell);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawLabel(ctx: Canvas2D, piece: PieceState, o: Orient, x: number, y: number, cell: number): void {
   ctx.font = `${Math.round(cell * (o.label.big ? 1.2 : 0.7))}px ${EMOJI_FONT}`;
   ctx.textAlign = 'center';

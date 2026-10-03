@@ -49,4 +49,7 @@ export const theme = {
   buttonHint: '#ffc94d',
   buttonSkip: '#5ed3c3',
   adBadge: '#e8604c',
+
+  /** 提示摆好的物品身上闪的光 */
+  hintGlow: '#fff2a8',
 } as const;

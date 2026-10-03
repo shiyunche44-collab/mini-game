@@ -187,7 +187,8 @@ describe('Web 版冒烟测试', () => {
     await page.waitForSelector('[data-mock-ad]');
     await page.waitForFunction(() => !document.querySelector('[data-action=claim]').disabled, null, { timeout: 6000 });
     await page.locator('[data-action=claim]').click();
-    await page.waitForTimeout(500);
+    // 书飞过去约 220ms，落稳后还要闪约 900ms 的光，光暗下去才是书本来的颜色
+    await page.waitForTimeout(1500);
     assert.ok(isColor(await pixel(page, grid.x + 10, grid.y + 10), BOOK), '领取之后书应该被摆好');
     assert.equal((await save(page)).game.snapshot.hints, 1);
     assert.deepEqual(errors, []);
