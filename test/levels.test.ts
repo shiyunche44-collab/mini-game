@@ -31,8 +31,8 @@ function fingerprint(from: number, to: number): string {
 }
 
 describe('levelConfig：难度参数', () => {
-  it('前 7 关是手工定的，第 1 关不能旋转，第 6 关开始有拉杆槽', () => {
-    const rows = Array.from({ length: 7 }, (_, i) => {
+  it('前 9 关是手工定的，第 1 关不能旋转，第 6 关开始有拉杆槽', () => {
+    const rows = Array.from({ length: 9 }, (_, i) => {
       const c = levelConfig(i + 1);
       return [c.cols, c.rows, c.tier, c.rotate, c.singles, c.blocked];
     });
@@ -44,6 +44,8 @@ describe('levelConfig：难度参数', () => {
       [5, 6, 3, true, 1, 0],
       [5, 6, 3, true, 1, 2],
       [6, 6, 3, true, 1, 1],
+      [5, 6, 3, true, 1, 1],
+      [6, 6, 3, true, 0, 2],
     ]);
   });
 
@@ -52,15 +54,16 @@ describe('levelConfig：难度参数', () => {
     assert.deepEqual(withTip, [1, 2, 6]);
   });
 
-  it('第 8 关起在 6 档之间循环，单格物品每 3 关少一次', () => {
+  it('第 10 关起在 6 档之间循环，单格物品每 3 关少一次', () => {
     const size = (n: number) => {
       const c = levelConfig(n);
       return `${c.cols}x${c.rows}槽${c.blocked}`;
     };
-    assert.deepEqual([8, 9, 10, 11, 12, 13].map(size), ['5x6槽1', '6x6槽2', '6x7槽1', '5x5槽0', '6x7槽3', '6x6槽0']);
-    assert.deepEqual([14, 15, 16, 17, 18, 19].map(size), [8, 9, 10, 11, 12, 13].map(size));
-    assert.deepEqual([8, 9, 10, 11, 12].map((n) => levelConfig(n).singles), [1, 0, 1, 1, 0]);
+    assert.deepEqual([10, 11, 12, 13, 14, 15].map(size), ['5x6槽1', '6x6槽2', '6x7槽1', '5x5槽0', '6x7槽3', '6x6槽0']);
+    assert.deepEqual([16, 17, 18, 19, 20, 21].map(size), [10, 11, 12, 13, 14, 15].map(size));
+    assert.deepEqual([10, 11, 12, 13, 14].map((n) => levelConfig(n).singles), [1, 1, 0, 1, 1]);
     assert.ok([8, 100, 5000].every((n) => levelConfig(n).tier === 3 && levelConfig(n).rotate));
+    assert.ok([10, 100, 5000].every((n) => levelConfig(n).feature.length === 0 && levelConfig(n).ban.length === 0));
   });
 
   it('关卡号不是从 1 开始的整数时抛错', () => {
@@ -130,6 +133,63 @@ describe('generateLevel：每一关都正好铺满', () => {
   });
 });
 
+describe('教学节奏：新形状一个一个地引入', () => {
+  /** 这个物品第一次出现在哪一关（在前 30 关里找） */
+  const firstSeen = (id: string): number | null => {
+    for (let n = 1; n <= 30; n++) if (generateLevel(n).pieces.some((p) => p.item.id === id)) return n;
+    return null;
+  };
+
+  it('五格的难形状依次在第 5、7、8、9 关第一次出现：外套、牛仔裤、玩偶、裙子', () => {
+    assert.deepEqual(['coat', 'jeans', 'teddy', 'dress'].map(firstSeen), [5, 7, 8, 9]);
+  });
+
+  it('第 6 关只引入拉杆槽，没有新的难形状', () => {
+    const ids = generateLevel(6).pieces.map((p) => p.item.id);
+    assert.ok(ids.every((id) => !['jeans', 'teddy', 'dress'].includes(id)));
+    assert.ok(generateLevel(6).blocked.length > 0);
+  });
+
+  it('每一关的"必须出现"都出现了，"不许出现"都没出现（前 200 关）', () => {
+    for (let n = 1; n <= 200; n++) {
+      const cfg = levelConfig(n);
+      const ids = new Set(generateLevel(n).pieces.map((p) => p.item.id));
+      for (const id of cfg.feature) assert.ok(ids.has(id), `第 ${n} 关应该有 ${id}`);
+      for (const id of cfg.ban) assert.ok(!ids.has(id), `第 ${n} 关不该有 ${id}`);
+    }
+  });
+
+  it('手工定的关卡里，必须出现的物品都在这一关的物品档次里（不会配出永远满足不了的要求）', () => {
+    for (let n = 1; n <= 9; n++) {
+      const cfg = levelConfig(n);
+      for (const id of cfg.feature) {
+        const item = generateLevel(n).pieces.find((p) => p.item.id === id)?.item;
+        assert.ok(item && item.tier <= cfg.tier && !cfg.ban.includes(id), `第 ${n} 关的 ${id}`);
+      }
+    }
+  });
+
+  it('第 3 关有 T 恤，第 4 关有法棍', () => {
+    assert.ok(generateLevel(3).pieces.some((p) => p.item.id === 'tshirt'));
+    assert.ok(generateLevel(4).pieces.some((p) => p.item.id === 'baguette'));
+  });
+});
+
+describe('物品权重：形状一样的只算一份', () => {
+  it('第 10～2000 关里，1×2 的小件不超过所有物品的 25%（以前是 31%）', () => {
+    let total = 0;
+    let twos = 0;
+    for (let n = 10; n <= 2000; n++) {
+      for (const p of generateLevel(n).pieces) {
+        total++;
+        if (p.item.size === 2) twos++;
+      }
+    }
+    assert.ok(twos / total < 0.25, `占了 ${((100 * twos) / total).toFixed(1)}%`);
+    assert.ok(twos / total > 0.1, '也不能没有：小件是收尾用的');
+  });
+});
+
 describe('generateLevel：同一关号结果一致', () => {
   it('连续生成两次，完全相同', () => {
     for (let n = 1; n <= 200; n++) assert.deepEqual(plain(generateLevel(n)), plain(generateLevel(n)), `第 ${n} 关`);
@@ -150,8 +210,8 @@ describe('generateLevel：指纹（ADR 0003）', () => {
   // 生成器的任何改动，只要让某一关变样，这里就会失败。
   // 如果是有意的改动：把 GENERATOR_VERSION 加 1，更新下面两处，并在提交说明里写清楚为什么。
   // 上线以后再改会让玩家看到的关卡变样，要格外慎重。
-  const VERSION = 1;
-  const FIRST_200 = '1263e1a160ce2ddcb688df0e5dd9405cfb5ec651d54e50a06ca6103196c1770a';
+  const VERSION = 2;
+  const FIRST_200 = '395663366c6c890dd144ecd809bc9750c66b1672a1b8942ab6e6bf54d244706c';
 
   it('前三关的内容（给人看的）', () => {
     assert.deepEqual(plain(generateLevel(1)), {

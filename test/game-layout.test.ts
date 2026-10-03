@@ -120,7 +120,7 @@ describe('computeLayout：这一关的内容决定哪些东西存在', () => {
 
   it('箱子越大格子越小：宽度方向放不下时缩小格子', () => {
     const small = computeLayout(screen(375, 900), generateLevel(1)); // 4 列
-    const big = computeLayout(screen(375, 900), generateLevel(10)); // 6 列
+    const big = computeLayout(screen(375, 900), generateLevel(11)); // 6 列
     assert.ok(big.board.cell < small.board.cell);
     assert.ok(big.board.frame.w <= big.content.w);
   });
