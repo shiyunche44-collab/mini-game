@@ -10,6 +10,7 @@ import type { Game } from '../core/game.ts';
 import { easing } from '../engine/tween.ts';
 import type { Platform } from '../platform/types.ts';
 import type { Layout } from './layout.ts';
+import type { ItemIcons } from './icons.ts';
 import { drawPieceGhost } from './pieceView.ts';
 import { EMOJI_FONT, theme } from './theme.ts';
 
@@ -54,9 +55,11 @@ export class Guide {
   private readonly platform: Pick<Platform, 'ctx'>;
   private readonly layout: Layout;
   private readonly game: Game;
+  private readonly icons: ItemIcons | undefined;
   private idle = 0;
 
-  constructor(platform: Pick<Platform, 'ctx'>, layout: Layout, game: Game, kind: GuideKind) {
+  constructor(platform: Pick<Platform, 'ctx'>, layout: Layout, game: Game, kind: GuideKind, icons?: ItemIcons) {
+    this.icons = icons;
     this.platform = platform;
     this.layout = layout;
     this.game = game;
@@ -106,7 +109,7 @@ export class Guide {
       const to = { x: board.grid.x + (sol.c + o.w / 2) * board.cell, y: board.grid.y + (sol.r + o.h / 2) * board.cell };
       const { ctx } = this.platform;
       if (pose.ghost > 0) {
-        drawPieceGhost(ctx, p, board.grid.x + sol.c * board.cell, board.grid.y + sol.r * board.cell, board.cell, GHOST_ALPHA * pose.ghost);
+        drawPieceGhost(ctx, p, board.grid.x + sol.c * board.cell, board.grid.y + sol.r * board.cell, board.cell, GHOST_ALPHA * pose.ghost, this.icons);
       }
       this.drawFinger(from.x + (to.x - from.x) * pose.move, from.y + (to.y - from.y) * pose.move, pose.alpha, t >= DRAG.press && t < DRAG.hold ? 1 : 0);
       return;

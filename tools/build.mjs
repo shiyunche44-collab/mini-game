@@ -4,12 +4,26 @@
 //   node tools/build.mjs web            生产构建（压缩）
 //   node tools/build.mjs web --serve    开发：监听改动自动重新打包，并起一个本地服务（端口默认 8000，可用 PORT 改）
 // 平台：web、wechat、douyin。微信、抖音的产物目录可以直接导入各自的开发者工具（见 docs/devtools.md）。
-import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as esbuild from 'esbuild';
 
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..');
+
+const ICON_DIR = 'assets/icons';
+
+/**
+ * 素材目录里有哪些物品图标（文件名去掉 .png，排序，保证每次构建结果一样）。
+ * 编进入口当常量（__ICON_IDS__）：游戏只请求产物里真有的图，没有图的物品画 emoji（ADR 0006）。
+ */
+export function iconIds(dir = join(ROOT, ICON_DIR)) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.png'))
+    .map((f) => f.slice(0, -'.png'.length))
+    .sort();
+}
 
 /** 每个平台：入口、产物目录、要原样复制进产物的模板文件 */
 export const TARGETS = {
@@ -63,6 +77,7 @@ function buildOptions(t, { dev, write }) {
     minify: !dev,
     sourcemap: dev,
     legalComments: 'none',
+    define: { __ICON_IDS__: JSON.stringify(iconIds()) },
     write,
     logLevel: 'warning',
   };
@@ -71,6 +86,9 @@ function buildOptions(t, { dev, write }) {
 function copyTemplates(t) {
   mkdirSync(join(ROOT, t.outdir), { recursive: true });
   for (const [from, to] of t.copy) copyFileSync(join(ROOT, from), join(ROOT, t.outdir, to));
+  // 素材原样复制进产物，不打进 JS（包体检查只管 JS，素材有自己的检查：tools/check-assets.mjs）
+  const icons = iconIds();
+  if (icons.length > 0) cpSync(join(ROOT, 'assets'), join(ROOT, t.outdir, 'assets'), { recursive: true });
 }
 
 async function serve(name) {

@@ -2,6 +2,7 @@
 // wx 和下一帧函数都由入口传进来，这样没有微信环境也能用假对象测试；本文件里不直接碰全局对象。
 import type {
   Canvas2D,
+  ImageSource,
   Platform,
   PointerHandlers,
   PointerPoint,
@@ -78,6 +79,8 @@ export interface WechatApi {
   vibrateShort(option: { type: 'light' | 'heavy' }): void;
   /** 合成音效用。老版本没有就没有声音；基础库 2.19.0 起有 */
   createWebAudioContext?(): unknown;
+  /** 读图用（ADR 0006）。微信里是 wx.createImage */
+  createImage?(): MiniImage;
   createRewardedVideoAd(option: { adUnitId: string }): WxRewardedAd;
   createInterstitialAd(option: { adUnitId: string }): WxInterstitialAd;
   showModal(option: WxModalOption): void;
@@ -163,6 +166,8 @@ export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequeste
 
     audio: createAudio(api.createWebAudioContext?.bind(api)),
 
+    loadImage: (path) => loadImage(api, path),
+
     share(payload): void {
       try {
         api.shareAppMessage({ title: payload.title, query: payload.query });
@@ -215,6 +220,28 @@ const REWARD_TEXT: Record<RewardedPlacement, string> = {
  * 激励视频只有完整看完才返回 true；中途关闭、加载失败、没有广告都返回 false，不会抛异常。
  * 同一时间只放一个：已经有一个在放时再请求直接返回 false，和 Web 的模拟广告一样。
  */
+/** 小游戏里的图片对象：设 src 开始读，读完回调 onload，读不了回调 onerror */
+interface MiniImage extends ImageSource {
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  src: string;
+}
+
+/** 读图（ADR 0006）：任何失败（接口不存在、抛异常、读不到文件）都返回 null，游戏退回 emoji */
+function loadImage(api: WechatApi, path: string): Promise<ImageSource | null> {
+  return new Promise((resolve) => {
+    try {
+      const img = api.createImage?.();
+      if (!img) return resolve(null);
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = path;
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 /** 游戏用到的那一小部分 WebAudio。AudioParam 的自动化方法（淡入淡出、滑音）老版本可能没有，所以都是可选的 */
 interface AudioParamLike {
   value: number;

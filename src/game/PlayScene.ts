@@ -16,6 +16,7 @@ import { easing, Tweens, wave, type TweenHandle } from '../engine/tween.ts';
 import type { Platform } from '../platform/types.ts';
 import { Guide, type GuideKind } from './Guide.ts';
 import { boardCellAt, computeLayout, contains, type Layout, type Rect } from './layout.ts';
+import type { ItemIcons } from './icons.ts';
 import { drawPiece, drawPieceGhost, drawPieceGlow } from './pieceView.ts';
 import { findSnap, type Snap } from './snap.ts';
 import type { SoundName } from './sounds.ts';
@@ -125,13 +126,22 @@ export class PlayScene implements GestureHandlers {
   private readonly glows = new Map<number, Glow>();
   /** 新手引导：玩家愣着不动时演示下一步。玩家做过这个动作就撤掉，这一关不再出现 */
   private guide: Guide | null;
+  /** 物品图标，没有就画 emoji */
+  private readonly icons: ItemIcons | undefined;
 
-  constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game, events?: SceneEvents, guide: GuideKind | null = null) {
+  constructor(
+    platform: Pick<Platform, 'ctx' | 'screen'>,
+    game: Game,
+    events?: SceneEvents,
+    guide: GuideKind | null = null,
+    icons?: ItemIcons,
+  ) {
+    this.icons = icons;
     this.platform = platform;
     this.game = game;
     this.events = events;
     this.layout = computeLayout(platform.screen, game.level);
-    this.guide = guide ? new Guide(platform, this.layout, game, guide) : null;
+    this.guide = guide ? new Guide(platform, this.layout, game, guide, icons) : null;
   }
 
   /** 推进动画。dtMs 是主循环给的帧间隔 */
@@ -492,7 +502,7 @@ export class PlayScene implements GestureHandlers {
     const spin = this.spins.get(id);
     const shake = this.shakes.get(id);
     if (!spin && !shake) {
-      drawPiece(ctx, piece, x, y, cell);
+      drawPiece(ctx, piece, x, y, cell, 0, this.icons);
       return;
     }
     const o = piece.item.orients[piece.oi];
@@ -506,7 +516,7 @@ export class PlayScene implements GestureHandlers {
       ctx.rotate(spin.angle);
       ctx.translate(-cx, -cy);
     }
-    drawPiece(ctx, piece, x, y, cell);
+    drawPiece(ctx, piece, x, y, cell, 0, this.icons);
     ctx.restore();
   }
 
@@ -574,7 +584,7 @@ export class PlayScene implements GestureHandlers {
 
   private drawPieceAt(ctx: Platform['ctx'], id: number, x: number, y: number, k: number, lift: number): void {
     const piece = this.game.pieces[id];
-    if (piece) drawPiece(ctx, piece, x, y, k, lift);
+    if (piece) drawPiece(ctx, piece, x, y, k, lift, this.icons);
   }
 
   private drawDragged(ctx: Platform['ctx'], d: Dragged): void {
@@ -589,7 +599,7 @@ export class PlayScene implements GestureHandlers {
     const piece = d && this.game.pieces[d.id];
     if (!d?.snap || !piece) return;
     const { board } = this.layout;
-    drawPieceGhost(ctx, piece, board.grid.x + d.snap.c * board.cell, board.grid.y + d.snap.r * board.cell, board.cell, GHOST_ALPHA);
+    drawPieceGhost(ctx, piece, board.grid.x + d.snap.c * board.cell, board.grid.y + d.snap.r * board.cell, board.cell, GHOST_ALPHA, this.icons);
   }
 
   private drawBackground(): void {

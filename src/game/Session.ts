@@ -31,6 +31,7 @@ import type { DragEvent, GestureHandlers } from '../engine/input.ts';
 import { easing, Tweens } from '../engine/tween.ts';
 import type { Platform, SharePayload } from '../platform/types.ts';
 import type { GuideKind } from './Guide.ts';
+import { Icons } from './icons.ts';
 import { PlayScene, type ButtonKind } from './PlayScene.ts';
 import { Sfx } from './Sfx.ts';
 import { WinOverlay } from './WinOverlay.ts';
@@ -40,11 +41,13 @@ export interface SessionOptions {
   level?: number;
   /** 调试用：开局先用掉几次提示，用来看箱子里摆了东西的样子。全摆完就直接进入过关画面 */
   hints?: number;
+  /** 产物里有图标的物品 id（构建时扫描 assets/icons 得到，入口传进来）。没传就都画 emoji */
+  icons?: readonly string[];
 }
 
 type SessionPlatform = Pick<
   Platform,
-  'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track' | 'audio'
+  'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track' | 'audio' | 'loadImage'
 >;
 
 /** 前几关才有新手引导：之后的关卡玩家早就会了 */
@@ -87,6 +90,7 @@ export class Session implements GestureHandlers {
   private slide: Slide | null = null;
   private readonly tweens = new Tweens();
   private readonly sfx: Sfx;
+  private readonly icons: Icons;
   /** 正在等插屏广告放完：这期间不响应触摸 */
   private busy = false;
   /** 这一关是什么时候开始玩的（platform.now()），算通关用时 */
@@ -100,6 +104,7 @@ export class Session implements GestureHandlers {
     this.platform = platform;
     this.persist = options.level === undefined;
     this.sfx = new Sfx(platform);
+    this.icons = new Icons(platform, options.icons ?? []);
     this.progress =
       options.level === undefined
         ? loadProgress(platform.storage.get(SAVE_KEY, null))
@@ -234,6 +239,7 @@ export class Session implements GestureHandlers {
         toggleSound: () => this.sfx.toggle(),
       },
       this.guideFor(game),
+      this.icons,
     );
   }
 

@@ -35,6 +35,8 @@ interface FakeApiOptions {
    * 'missing' 是接口不存在；'createThrows' 是创建上下文时抛异常；'nodeThrows' 是创建振荡器时抛异常；'suspended' 是创建出来是挂起的
    */
   audio?: 'noAutomation' | 'missing' | 'createThrows' | 'nodeThrows' | 'suspended';
+  /** 读图怎么样：默认读成功；'error' 是读不到文件（触发 onerror）；'missing' 是接口不存在；'throws' 是创建时抛异常 */
+  image?: 'error' | 'missing' | 'throws';
 }
 
 function fakeApi(o: FakeApiOptions = {}) {
@@ -100,6 +102,24 @@ function fakeApi(o: FakeApiOptions = {}) {
     onStart: () => undefined,
     onStop: (cb: (res: { videoPath: string }) => void) => void recording.stopCbs.push(cb),
     onError: (cb: (err: unknown) => void) => void recording.errorCbs.push(cb),
+  };
+
+  // ---- 读图 ----
+  const imageLog = { paths: [] as string[] };
+  const createImage = () => {
+    if (o.image === 'throws') throw new Error('不支持');
+    const img = {
+      width: 192,
+      height: 192,
+      onload: null as (() => void) | null,
+      onerror: null as (() => void) | null,
+      set src(path: string) {
+        imageLog.paths.push(path);
+        // 和真的一样：设了 src 之后异步回调
+        setImmediate(() => (o.image === 'error' ? img.onerror : img.onload)?.());
+      },
+    };
+    return img;
   };
 
   // ---- 音效（WebAudio） ----
@@ -283,6 +303,7 @@ function fakeApi(o: FakeApiOptions = {}) {
         }
       : {}),
     ...(o.audio === 'missing' ? {} : { createWebAudioContext: audioContext }),
+    ...(o.image === 'missing' ? {} : { createImage }),
     showModal: (option: {
       title: string;
       content: string;
@@ -294,7 +315,7 @@ function fakeApi(o: FakeApiOptions = {}) {
       else option.success({ confirm: modal.reply === 'confirm' });
     },
   };
-  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode, share, recording, reports, sidebarCalls, audio };
+  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode, share, recording, reports, sidebarCalls, audio, imageLog };
 }
 
 type Fake = ReturnType<typeof fakeApi>;
@@ -701,6 +722,45 @@ for (const { name, reportVia, make } of variants) {
       const { p } = build();
       assert.equal(p.recorder, undefined);
       assert.equal(p.sidebar, undefined);
+    });
+  });
+}
+
+for (const { name, make } of variants) {
+  describe(`${name} 读图`, () => {
+    const build = (o: FakeApiOptions = {}) => {
+      const f = fakeApi(o);
+      return { f, p: make(f, frames().request) };
+    };
+
+    it('读成功：返回平台的图片对象，路径原样交给平台', async () => {
+      const { f, p } = build();
+      const img = await p.loadImage('assets/icons/boot.png');
+      assert.ok(img);
+      assert.equal(img.width, 192);
+      assert.deepEqual(f.imageLog.paths, ['assets/icons/boot.png']);
+    });
+
+    it('读不到文件（onerror）：返回 null，不抛', async () => {
+      const { p } = build({ image: 'error' });
+      assert.equal(await p.loadImage('assets/icons/boot.png'), null);
+    });
+
+    it('平台没有这个接口：返回 null，不抛', async () => {
+      const { p } = build({ image: 'missing' });
+      assert.equal(await p.loadImage('assets/icons/boot.png'), null);
+    });
+
+    it('创建图片对象时抛异常：返回 null，不抛', async () => {
+      const { p } = build({ image: 'throws' });
+      assert.equal(await p.loadImage('assets/icons/boot.png'), null);
+    });
+
+    it('同时读几张：各自返回，互不影响', async () => {
+      const { f, p } = build();
+      const all = await Promise.all(['a', 'b', 'c'].map((n) => p.loadImage(`assets/icons/${n}.png`)));
+      assert.equal(all.filter(Boolean).length, 3);
+      assert.equal(f.imageLog.paths.length, 3);
     });
   });
 }

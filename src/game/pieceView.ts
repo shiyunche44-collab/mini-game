@@ -3,7 +3,12 @@
 import { addRoundRect, fillRoundRect, mixColor } from '../engine/draw.ts';
 import type { PieceState } from '../core/game.ts';
 import type { Canvas2D } from '../platform/types.ts';
+import type { ItemIcons } from './icons.ts';
 import { EMOJI_FONT } from './theme.ts';
+
+/** 图标画多大（单位：格）：小物品里一格大，2×2 以上的实心块里 1.6 格（art-spec.md） */
+const ICON_CELLS = 1;
+const ICON_CELLS_BIG = 1.6;
 
 type Orient = NonNullable<PieceState['item']['orients'][number]>;
 
@@ -26,8 +31,17 @@ function outlinePath(ctx: Canvas2D, o: Orient, x: number, y: number, cell: numbe
 /**
  * 把物品画在 (x, y)，这是它当前朝向外框的左上角。
  * lift 大于 0 时表示被手指拿起来：下面垫一层影子，让它看起来飘着（拖动时用）。
+ * icons 有这件物品的图标就画图标，没有就画 emoji。
  */
-export function drawPiece(ctx: Canvas2D, piece: PieceState, x: number, y: number, cell: number, lift = 0): void {
+export function drawPiece(
+  ctx: Canvas2D,
+  piece: PieceState,
+  x: number,
+  y: number,
+  cell: number,
+  lift = 0,
+  icons?: ItemIcons,
+): void {
   const o = piece.item.orients[piece.oi];
   if (!o) return;
   const base = piece.item.color;
@@ -70,7 +84,7 @@ export function drawPiece(ctx: Canvas2D, piece: PieceState, x: number, y: number
   };
   layer(dark, 0);
   layer(base, thick);
-  drawLabel(ctx, piece, o, x, y, cell);
+  drawLabel(ctx, piece, o, x, y, cell, icons);
   ctx.restore();
 }
 
@@ -78,7 +92,15 @@ export function drawPiece(ctx: Canvas2D, piece: PieceState, x: number, y: number
  * 吸附预览：在 (x, y) 画一个半透明的物品，表示松手会落在这里。
  * 整件轮廓一次填充，不分层：分层画再叠半透明，格子之间会透出一道道深浅不一的条纹。
  */
-export function drawPieceGhost(ctx: Canvas2D, piece: PieceState, x: number, y: number, cell: number, alpha: number): void {
+export function drawPieceGhost(
+  ctx: Canvas2D,
+  piece: PieceState,
+  x: number,
+  y: number,
+  cell: number,
+  alpha: number,
+  icons?: ItemIcons,
+): void {
   const o = piece.item.orients[piece.oi];
   if (!o) return;
   ctx.save();
@@ -86,7 +108,7 @@ export function drawPieceGhost(ctx: Canvas2D, piece: PieceState, x: number, y: n
   outlinePath(ctx, o, x, y, cell);
   ctx.fillStyle = piece.item.color;
   ctx.fill();
-  drawLabel(ctx, piece, o, x, y, cell);
+  drawLabel(ctx, piece, o, x, y, cell, icons);
   ctx.restore();
 }
 
@@ -108,7 +130,13 @@ export function drawPieceGlow(ctx: Canvas2D, piece: PieceState, x: number, y: nu
   ctx.restore();
 }
 
-function drawLabel(ctx: Canvas2D, piece: PieceState, o: Orient, x: number, y: number, cell: number): void {
+function drawLabel(ctx: Canvas2D, piece: PieceState, o: Orient, x: number, y: number, cell: number, icons?: ItemIcons): void {
+  const icon = icons?.get(piece.item.id);
+  if (icon) {
+    const size = cell * (o.label.big ? ICON_CELLS_BIG : ICON_CELLS);
+    ctx.drawImage(icon, x + o.label.x * cell - size / 2, y + o.label.y * cell - size / 2, size, size);
+    return;
+  }
   ctx.font = `${Math.round(cell * (o.label.big ? 1.2 : 0.7))}px ${EMOJI_FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';

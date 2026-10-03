@@ -204,6 +204,12 @@ export interface Platform {
     play(tones: readonly Tone[]): void;
   };
 
+  /**
+   * 读一张图（ADR 0006）。path 相对于产物根目录，例如 'assets/icons/boot.png'。
+   * 读成功返回能交给 drawImage 的图；文件不存在、解码失败、平台不支持都返回 null，不抛异常。
+   */
+  loadImage(path: string): Promise<ImageSource | null>;
+
   share(payload: SharePayload): void;
   vibrate(kind: 'light' | 'heavy'): void;
   /** 回到前台、进入后台。回调可以注册多次。 */

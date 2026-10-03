@@ -1,6 +1,7 @@
 // Web 平台实现：开发调试和手机试玩链接用。只把浏览器 API 翻译成 Platform 接口，不含游戏逻辑。
 import type {
   Canvas2D,
+  ImageSource,
   InterstitialPlacement,
   Platform,
   PointerHandlers,
@@ -111,6 +112,15 @@ export function createWebPlatform(canvas: HTMLCanvasElement): Platform {
     },
 
     audio: createAudio(),
+
+    loadImage(path: string): Promise<ImageSource | null> {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = path;
+      });
+    },
 
     share(payload): void {
       console.info('[分享]', payload.title, payload.query ?? '');
