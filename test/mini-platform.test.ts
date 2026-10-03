@@ -24,6 +24,10 @@ interface FakeApiOptions {
   /** 假装平台不理会我们设的画布大小，一直保持这个尺寸 */
   fixedCanvas?: { width: number; height: number };
   withWindowInfo?: boolean;
+  /** 抖音才有的录屏管理器 */
+  withRecorder?: boolean;
+  /** 老版本：分享菜单的接口不存在，调用会抛异常 */
+  noShareMenu?: boolean;
 }
 
 function fakeApi(o: FakeApiOptions = {}) {
@@ -55,6 +59,35 @@ function fakeApi(o: FakeApiOptions = {}) {
   const shown: (() => void)[] = [];
   const hidden: (() => void)[] = [];
   const calls = { createCanvas: 0, getSystemInfoSync: 0, getWindowInfo: 0, vibrate: [] as unknown[] };
+
+  // ---- 分享 ----
+  const share = {
+    sent: [] as { title: string; query?: string; channel?: string; extra?: { videoPath: string } }[],
+    menus: [] as unknown[],
+    defaultContent: null as null | (() => { title: string }),
+    throws: false,
+    /** 视频分享的结果 */
+    videoResult: 'success' as 'success' | 'fail',
+  };
+
+  // ---- 录屏（抖音） ----
+  const recording = {
+    started: [] as { duration: number }[],
+    stops: 0,
+    stopCbs: [] as ((res: { videoPath: string }) => void)[],
+    errorCbs: [] as ((err: unknown) => void)[],
+    startThrows: false,
+  };
+  const manager = {
+    start: (o: { duration: number }) => {
+      if (recording.startThrows) throw new Error('busy');
+      recording.started.push(o);
+    },
+    stop: () => void recording.stops++,
+    onStart: () => undefined,
+    onStop: (cb: (res: { videoPath: string }) => void) => void recording.stopCbs.push(cb),
+    onError: (cb: (err: unknown) => void) => void recording.errorCbs.push(cb),
+  };
 
   // ---- 广告 ----
   /** 确认框怎么回应：点领取 / 点关闭 / 弹不出来 */
@@ -139,6 +172,24 @@ function fakeApi(o: FakeApiOptions = {}) {
         onError: (cb: (err: unknown) => void) => void ad.errorCbs.push(cb),
       };
     },
+    shareAppMessage: (option: {
+      title: string;
+      query?: string;
+      channel?: string;
+      extra?: { videoPath: string };
+      success?: () => void;
+      fail?: () => void;
+    }) => {
+      if (share.throws) throw new Error('不支持');
+      share.sent.push({ title: option.title, query: option.query, channel: option.channel, extra: option.extra });
+      if (option.channel === 'video') (share.videoResult === 'success' ? option.success : option.fail)?.();
+    },
+    showShareMenu: (option: unknown) => {
+      if (o.noShareMenu) throw new Error('老版本没有');
+      share.menus.push(option);
+    },
+    onShareAppMessage: (cb: () => { title: string }) => void (share.defaultContent = cb),
+    ...(o.withRecorder ? { getGameRecorderManager: () => manager } : {}),
     showModal: (option: {
       title: string;
       content: string;
@@ -150,7 +201,7 @@ function fakeApi(o: FakeApiOptions = {}) {
       else option.success({ confirm: modal.reply === 'confirm' });
     },
   };
-  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode };
+  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode, share, recording };
 }
 
 type Fake = ReturnType<typeof fakeApi>;
@@ -302,6 +353,34 @@ for (const { name, make } of variants) {
         throw new Error('不支持');
       };
       assert.doesNotThrow(() => p.vibrate('light'));
+    });
+
+    describe('分享', () => {
+      it('share 把标题和链接参数交给平台', () => {
+        const { f, p } = build();
+        p.share({ title: '来整理行李', query: 'from=share&level=3' });
+        assert.deepEqual(f.share.sent, [
+          { title: '来整理行李', query: 'from=share&level=3', channel: undefined, extra: undefined },
+        ]);
+      });
+
+      it('没有链接参数也能分享；平台抛异常也不影响游戏', () => {
+        const { f, p } = build();
+        p.share({ title: '来整理行李' });
+        assert.equal(f.share.sent[0]?.query, undefined);
+        f.share.throws = true;
+        assert.doesNotThrow(() => p.share({ title: 'x' }));
+      });
+
+      it('启动时就打开右上角菜单的转发，并给它一个默认标题', () => {
+        const { f } = build();
+        assert.equal(f.share.menus.length, 1);
+        assert.match(f.share.defaultContent?.().title ?? '', /整理行李箱/);
+      });
+
+      it('老版本没有分享菜单的接口，平台照样能创建', () => {
+        assert.doesNotThrow(() => build({ noShareMenu: true }));
+      });
     });
 
     describe('广告：没填广告位 id，退回模拟（确认框）', () => {
@@ -504,3 +583,136 @@ for (const { name, make } of variants) {
     });
   });
 }
+
+describe('douyin 录屏', () => {
+  const setup = () => {
+    const f = fakeApi({ withRecorder: true });
+    const p = createDouyinPlatform(f.api, frames().request);
+    const recorder = p.recorder;
+    assert.ok(recorder, '抖音应该有 recorder');
+    /** 平台录好了：触发 onStop */
+    const finish = (videoPath: string) => {
+      for (const cb of f.recording.stopCbs) cb({ videoPath });
+    };
+    return { f, p, recorder, finish };
+  };
+
+  it('开始：按 300 秒的上限录；已经在录就不重复开始', () => {
+    const { f, recorder } = setup();
+    recorder.start();
+    recorder.start();
+    assert.deepEqual(f.recording.started, [{ duration: 300 }]);
+  });
+
+  it('停止：要等平台说录好了（onStop）才算完', async () => {
+    const { f, recorder, finish } = setup();
+    recorder.start();
+    let done = false;
+    const stopped = recorder.stop().then(() => (done = true));
+    await settled();
+    assert.equal(f.recording.stops, 1);
+    assert.equal(done, false);
+    finish('/tmp/a.mp4');
+    await stopped;
+    assert.equal(done, true);
+  });
+
+  it('没在录的时候 stop 立刻完成，不会去叫平台', async () => {
+    const { f, recorder } = setup();
+    await recorder.stop();
+    assert.equal(f.recording.stops, 0);
+  });
+
+  it('分享录好的视频：用视频分享的渠道，带着视频路径；玩家分享成功返回 true，取消返回 false', async () => {
+    const { f, recorder, finish } = setup();
+    recorder.start();
+    const stopped = recorder.stop();
+    finish('/tmp/a.mp4');
+    await stopped;
+
+    assert.equal(await recorder.share(), true);
+    assert.equal(f.share.sent[0]?.channel, 'video');
+    assert.equal(f.share.sent[0]?.extra?.videoPath, '/tmp/a.mp4');
+
+    f.share.videoResult = 'fail';
+    assert.equal(await recorder.share(), false);
+  });
+
+  it('还没录过就分享：返回 false，不弹分享面板', async () => {
+    const { f, recorder } = setup();
+    assert.equal(await recorder.share(), false);
+    assert.equal(f.share.sent.length, 0);
+  });
+
+  it('刚通关视频还在收尾时点分享：等录好了再分享', async () => {
+    const { f, recorder, finish } = setup();
+    recorder.start();
+    void recorder.stop();
+    const shared = recorder.share();
+    await settled();
+    assert.equal(f.share.sent.length, 0, '还没录好，不能分享');
+    finish('/tmp/b.mp4');
+    assert.equal(await shared, true);
+    assert.equal(f.share.sent[0]?.extra?.videoPath, '/tmp/b.mp4');
+  });
+
+  it('正在停止的时候来了新一关的 start：等停完再开始，不丢掉新一关', async () => {
+    const { f, recorder, finish } = setup();
+    recorder.start();
+    const stopped = recorder.stop();
+    recorder.start();
+    assert.equal(f.recording.started.length, 1, '还没停完，不能开始');
+    finish('/tmp/a.mp4');
+    await stopped;
+    assert.equal(f.recording.started.length, 2);
+  });
+
+  it('新一关开始之后分享的还是上一段录好的视频', async () => {
+    const { f, recorder, finish } = setup();
+    recorder.start();
+    const stopped = recorder.stop();
+    finish('/tmp/a.mp4');
+    await stopped;
+    recorder.start();
+    assert.equal(await recorder.share(), true);
+    assert.equal(f.share.sent[0]?.extra?.videoPath, '/tmp/a.mp4');
+  });
+
+  it('平台自己停下（录满上限）或出错之后，下一次 start 能重新开始', async () => {
+    const { f, recorder, finish } = setup();
+    recorder.start();
+    finish('/tmp/full.mp4');
+    recorder.start();
+    assert.equal(f.recording.started.length, 2);
+
+    for (const cb of f.recording.errorCbs) cb(new Error('没权限'));
+    recorder.start();
+    assert.equal(f.recording.started.length, 3);
+  });
+
+  it('同一时间只有一个分享：正在分享时再点，直接返回 false', async () => {
+    const { f, recorder, finish } = setup();
+    recorder.start();
+    const stopped = recorder.stop();
+    finish('/tmp/a.mp4');
+    await stopped;
+    f.api.shareAppMessage = () => undefined; // 分享面板一直不回结果
+    const first = recorder.share();
+    assert.equal(await recorder.share(), false);
+    void first;
+  });
+
+  it('平台开始录屏时抛异常，不影响游戏，之后还能再试', () => {
+    const { f, recorder } = setup();
+    f.recording.startThrows = true;
+    assert.doesNotThrow(() => recorder.start());
+    f.recording.startThrows = false;
+    recorder.start();
+    assert.equal(f.recording.started.length, 1);
+  });
+
+  it('客户端没有录屏接口就没有 recorder', () => {
+    const f = fakeApi();
+    assert.equal(createDouyinPlatform(f.api, frames().request).recorder, undefined);
+  });
+});

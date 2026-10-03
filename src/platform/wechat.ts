@@ -1,6 +1,6 @@
 // 微信小游戏平台实现：把 wx 的接口翻译成 Platform 接口，不含游戏逻辑。
 // wx 和下一帧函数都由入口传进来，这样没有微信环境也能用假对象测试；本文件里不直接碰全局对象。
-// 分享、埋点现在是占位实现：分享在 4.3，埋点在 4.4。
+// 埋点现在是占位实现（4.4）。
 import type { Canvas2D, Platform, PointerHandlers, PointerPoint, RewardedPlacement, SafeArea, ScreenInfo } from './types.ts';
 
 interface WxTouch {
@@ -71,6 +71,9 @@ export interface WechatApi {
   createRewardedVideoAd(option: { adUnitId: string }): WxRewardedAd;
   createInterstitialAd(option: { adUnitId: string }): WxInterstitialAd;
   showModal(option: WxModalOption): void;
+  shareAppMessage(option: { title: string; query?: string }): void;
+  showShareMenu(option: { menus: string[] }): void;
+  onShareAppMessage(cb: () => { title: string }): void;
 }
 
 /** 注册下一帧回调。小游戏里 requestAnimationFrame 是全局函数，不在 wx 上，所以由入口传进来。 */
@@ -94,6 +97,8 @@ export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequeste
   const ctx = real as unknown as Canvas2D;
   // 游戏层只用 CSS 像素，缩放在这里一次做完
   ctx.setTransform(dpr, 0, 0, canvas.height / height, 0, 0);
+
+  enableShareMenu(api);
 
   const screen: ScreenInfo = { width, height, dpr, safeArea: safeAreaOf(info) };
 
@@ -145,8 +150,12 @@ export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequeste
 
     ads: createAds(api, adUnits),
 
-    share(): void {
-      // 4.3
+    share(payload): void {
+      try {
+        api.shareAppMessage({ title: payload.title, query: payload.query });
+      } catch {
+        // 分享失败不影响游戏
+      }
     },
     vibrate(kind): void {
       try {
@@ -268,4 +277,17 @@ function createAds(api: WechatApi, adUnits: AdUnits): Platform['ads'] {
       });
     },
   };
+}
+
+/** 右上角菜单里的"转发"用的默认标题。游戏里主动点的分享用的是自己的标题（见 game/Session.ts） */
+const DEFAULT_SHARE_TITLE = '整理行李箱：把行李都装进箱子，就能出发';
+
+/** 打开右上角菜单的转发，并给它一个默认标题；老版本没有这些接口就算了 */
+function enableShareMenu(api: WechatApi): void {
+  try {
+    api.showShareMenu({ menus: ['shareAppMessage'] });
+    api.onShareAppMessage(() => ({ title: DEFAULT_SHARE_TITLE }));
+  } catch {
+    // 分享菜单打不开不影响游戏
+  }
 }

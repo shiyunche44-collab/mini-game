@@ -225,6 +225,8 @@ export interface FakePlatformOptions {
   height?: number;
   dpr?: number;
   safeArea?: Partial<SafeArea>;
+  /** 假装是支持录屏的平台（抖音）。默认没有，和微信、Web 一样 */
+  recorder?: boolean;
 }
 
 export class FakePlatform implements Platform {
@@ -370,6 +372,13 @@ export class FakePlatform implements Platform {
     this.tracked.push(params ? { event, params } : { event });
   }
 
+  // ---- 录屏（只有 recorder 选项打开时才有） ----
+  readonly recorderLog: ('start' | 'stop' | 'share')[] = [];
+  /** 测试用：下一次分享录屏的结果，默认成功 */
+  recorderShareResult = true;
+
+  recorder?: NonNullable<Platform['recorder']>;
+
   // ---- 前后台 ----
   private showCbs: (() => void)[] = [];
   private hideCbs: (() => void)[] = [];
@@ -391,6 +400,19 @@ export class FakePlatform implements Platform {
 
   constructor(opts: FakePlatformOptions = {}) {
     this.name = opts.name ?? 'web';
+    if (opts.recorder) {
+      this.recorder = {
+        start: () => void this.recorderLog.push('start'),
+        stop: () => {
+          this.recorderLog.push('stop');
+          return Promise.resolve();
+        },
+        share: () => {
+          this.recorderLog.push('share');
+          return Promise.resolve(this.recorderShareResult);
+        },
+      };
+    }
     this.screen = {
       width: opts.width ?? 375,
       height: opts.height ?? 667,

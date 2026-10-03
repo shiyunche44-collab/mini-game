@@ -1,6 +1,6 @@
 // 抖音小游戏平台实现：把 tt 的接口翻译成 Platform 接口，不含游戏逻辑。
 // tt 和下一帧函数都由入口传进来，这样没有抖音环境也能用假对象测试；本文件里不直接碰全局对象。
-// 分享、埋点现在是占位实现：分享在 4.3，埋点在 4.4。
+// 埋点现在是占位实现（4.4）。
 import type { Canvas2D, Platform, PointerHandlers, PointerPoint, RewardedPlacement, SafeArea, ScreenInfo } from './types.ts';
 
 interface TtTouch {
@@ -47,6 +47,22 @@ interface TtModalOption {
   fail(): void;
 }
 
+interface TtRecorderManager {
+  /** duration 单位是秒 */
+  start(option: { duration: number }): void;
+  stop(): void;
+  onStart(cb: () => void): void;
+  onStop(cb: (res: { videoPath: string }) => void): void;
+  onError(cb: (err: unknown) => void): void;
+}
+interface TtVideoShareOption {
+  channel: 'video';
+  title: string;
+  extra: { videoPath: string };
+  success(): void;
+  fail(): void;
+}
+
 /** 广告位 id。没填（空字符串或没传）的那一种广告退回模拟：激励视频弹确认框，插屏直接跳过。 */
 export interface AdUnits {
   rewarded?: string;
@@ -71,6 +87,11 @@ export interface DouyinApi {
   createRewardedVideoAd(option: { adUnitId: string }): TtRewardedAd;
   createInterstitialAd(option: { adUnitId: string }): TtInterstitialAd;
   showModal(option: TtModalOption): void;
+  shareAppMessage(option: { title: string; query?: string } | TtVideoShareOption): void;
+  /** 比较老的客户端没有录屏，没有就不提供 recorder */
+  getGameRecorderManager?(): TtRecorderManager;
+  showShareMenu(option: {  }): void;
+  onShareAppMessage(cb: () => { title: string }): void;
 }
 
 /** 注册下一帧回调。小游戏里 requestAnimationFrame 是全局函数，不在 tt 上，所以由入口传进来。 */
@@ -94,6 +115,8 @@ export function createDouyinPlatform(api: DouyinApi, requestFrame: FrameRequeste
   const ctx = real as unknown as Canvas2D;
   // 游戏层只用 CSS 像素，缩放在这里一次做完
   ctx.setTransform(dpr, 0, 0, canvas.height / height, 0, 0);
+
+  enableShareMenu(api);
 
   const screen: ScreenInfo = { width, height, dpr, safeArea: safeAreaOf(info) };
 
@@ -145,8 +168,12 @@ export function createDouyinPlatform(api: DouyinApi, requestFrame: FrameRequeste
 
     ads: createAds(api, adUnits),
 
-    share(): void {
-      // 4.3
+    share(payload): void {
+      try {
+        api.shareAppMessage({ title: payload.title, query: payload.query });
+      } catch {
+        // 分享失败不影响游戏
+      }
     },
     vibrate(kind): void {
       try {
@@ -161,6 +188,7 @@ export function createDouyinPlatform(api: DouyinApi, requestFrame: FrameRequeste
     onHide(cb: () => void): void {
       api.onHide(cb);
     },
+    ...(api.getGameRecorderManager ? { recorder: createRecorder(api, api.getGameRecorderManager()) } : {}),
     track(): void {
       // 4.4
     },
@@ -266,6 +294,109 @@ function createAds(api: DouyinApi, adUnits: AdUnits): Platform['ads'] {
           done();
         }
       });
+    },
+  };
+}
+
+/** 右上角菜单里的"转发"用的默认标题。游戏里主动点的分享用的是自己的标题（见 game/Session.ts） */
+const DEFAULT_SHARE_TITLE = '整理行李箱：把行李都装进箱子，就能出发';
+
+/** 打开右上角菜单的转发，并给它一个默认标题；老版本没有这些接口就算了 */
+function enableShareMenu(api: DouyinApi): void {
+  try {
+    api.showShareMenu({  });
+    api.onShareAppMessage(() => ({ title: DEFAULT_SHARE_TITLE }));
+  } catch {
+    // 分享菜单打不开不影响游戏
+  }
+}
+
+/** 抖音限制单段录屏最长 300 秒，超过会自己停下 */
+const RECORD_SECONDS = 300;
+const VIDEO_TITLE = '整理行李箱：看我怎么把行李塞进箱子';
+
+/**
+ * 录屏。录的过程是异步的（start 之后才开始录，stop 之后要等 onStop 才有视频），
+ * 所以记三个状态：空闲、录制中、正在停止。
+ * 游戏每一关开头调 start、通关时调 stop，两次调用可能挨得很近（玩家连点"下一站"），
+ * 正在停止的时候来了 start，就等停完再开始，不能丢掉新一关的录制。
+ */
+function createRecorder(api: DouyinApi, manager: TtRecorderManager): NonNullable<Platform['recorder']> {
+  let state: 'idle' | 'recording' | 'stopping' = 'idle';
+  let startAfterStop = false;
+  /** 最近一次录好的视频 */
+  let videoPath: string | null = null;
+  let stopped: (() => void)[] = [];
+  let sharing = false;
+
+  const begin = (): void => {
+    try {
+      manager.start({ duration: RECORD_SECONDS });
+      state = 'recording';
+    } catch {
+      state = 'idle';
+    }
+  };
+  const settleStop = (path: string | null): void => {
+    state = 'idle';
+    if (path) videoPath = path;
+    const waiting = stopped;
+    stopped = [];
+    for (const done of waiting) done();
+    if (startAfterStop) {
+      startAfterStop = false;
+      begin();
+    }
+  };
+  // 录满时长上限时平台自己停下，也会走 onStop
+  manager.onStop((res) => settleStop(res?.videoPath || null));
+  // 出错（没权限、录屏被占用）就当这一段没录成，之后还可以再开始
+  manager.onError(() => settleStop(null));
+
+  const untilStopped = (): Promise<void> => new Promise<void>((resolve) => stopped.push(resolve));
+
+  return {
+    start(): void {
+      if (state === 'idle') begin();
+      else if (state === 'stopping') startAfterStop = true;
+    },
+    stop(): Promise<void> {
+      if (state === 'idle') return Promise.resolve();
+      startAfterStop = false;
+      if (state === 'stopping') return untilStopped();
+      state = 'stopping';
+      const done = untilStopped();
+      try {
+        manager.stop();
+      } catch {
+        settleStop(null);
+      }
+      return done;
+    },
+    async share(): Promise<boolean> {
+      if (sharing) return false;
+      sharing = true;
+      try {
+        // 刚通关就点分享时，视频可能还在收尾
+        if (state === 'stopping') await untilStopped();
+        const path = videoPath;
+        if (!path) return false;
+        return await new Promise<boolean>((resolve) => {
+          try {
+            api.shareAppMessage({
+              channel: 'video',
+              title: VIDEO_TITLE,
+              extra: { videoPath: path },
+              success: () => resolve(true),
+              fail: () => resolve(false),
+            });
+          } catch {
+            resolve(false);
+          }
+        });
+      } finally {
+        sharing = false;
+      }
     },
   };
 }

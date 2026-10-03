@@ -22,7 +22,7 @@ import {
   type Progress,
 } from '../core/progress.ts';
 import type { DragEvent, GestureHandlers } from '../engine/input.ts';
-import type { Platform } from '../platform/types.ts';
+import type { Platform, SharePayload } from '../platform/types.ts';
 import { PlayScene, type ButtonKind } from './PlayScene.ts';
 import { WinOverlay } from './WinOverlay.ts';
 
@@ -33,7 +33,7 @@ export interface SessionOptions {
   hints?: number;
 }
 
-type SessionPlatform = Pick<Platform, 'ctx' | 'screen' | 'storage' | 'ads' | 'now'>;
+type SessionPlatform = Pick<Platform, 'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder'>;
 
 export class Session implements GestureHandlers {
   private readonly platform: SessionPlatform;
@@ -126,6 +126,8 @@ export class Session implements GestureHandlers {
   }
 
   private makeScene(game: Game): PlayScene {
+    // 每一关开始时录（已经在录就接着录，平台自己处理），通关时停，登机牌上才能分享这一段
+    this.platform.recorder?.start();
     return new PlayScene(this.platform, game, {
       change: () => this.onChange(),
       complete: () => this.onComplete(),
@@ -147,8 +149,13 @@ export class Session implements GestureHandlers {
     const cleared = game.level;
     this.progress = nextLevel(this.progress);
     this.save();
-    this.win = new WinOverlay(this.platform, layout, { level: cleared, hintsUsed: game.hintsUsed }, () => {
-      void this.advance(cleared.n);
+    const recorder = this.platform.recorder;
+    void recorder?.stop().catch(() => undefined);
+    this.win = new WinOverlay(this.platform, layout, { level: cleared, hintsUsed: game.hintsUsed }, {
+      next: () => void this.advance(cleared.n),
+      share: () => this.platform.share(shareOf(cleared.n)),
+      // 分享面板是平台自己的界面，不需要 busy；失败（没录到、玩家取消）时什么都不发生，登机牌还在
+      ...(recorder ? { shareVideo: () => void recorder.share().catch(() => false) } : {}),
     });
   }
 
@@ -199,4 +206,9 @@ export class Session implements GestureHandlers {
       this.busy = false;
     }
   }
+}
+
+/** 分享出去的内容：通关的关卡号放进链接参数，以后（4.4）可以用来统计从哪来 */
+function shareOf(clearedLevel: number): SharePayload {
+  return { title: `我把第 ${clearedLevel} 关的行李装下了，你能装下吗？`, query: `from=share&level=${clearedLevel}` };
 }

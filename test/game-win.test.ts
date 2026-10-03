@@ -13,7 +13,7 @@ function overlay(n = 1, size: [number, number] = [375, 667], hintsUsed = 0) {
   const level = generateLevel(n);
   const layout = computeLayout(p.screen, level);
   let nexts = 0;
-  const o = new WinOverlay(p, layout, { level, hintsUsed }, () => nexts++);
+  const o = new WinOverlay(p, layout, { level, hintsUsed }, { next: () => nexts++, share: () => undefined });
   const step = (ms: number): void => {
     for (let t = 0; t < ms; t += FRAME) o.update(FRAME);
   };

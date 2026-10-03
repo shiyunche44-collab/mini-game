@@ -31,6 +31,10 @@ function fakeRuntime(globalName) {
     onShow: () => {},
     onHide: () => {},
     vibrateShort: () => {},
+    // 右上角菜单的转发：启动时会注册
+    showShareMenu: () => {},
+    onShareAppMessage: () => {},
+    shareAppMessage: () => {},
     // 产物里广告位 id 是空的，不会走真广告，所以只给确认框。真广告接口由 test/mini-platform.test.ts 测
     showModal: (o) => {
       modal.shown.push(o.title);
