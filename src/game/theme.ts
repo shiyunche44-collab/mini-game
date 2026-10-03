@@ -50,6 +50,10 @@ export const theme = {
   buttonSkip: '#5ed3c3',
   adBadge: '#e8604c',
 
+  /** 标题栏里静音开关的底色 */
+  soundOn: '#fbe9d0',
+  soundOff: '#e6e0d8',
+
   /** 提示摆好的物品身上闪的光 */
   hintGlow: '#fff2a8',
 

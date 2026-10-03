@@ -55,6 +55,9 @@ describe('computeLayout：各种屏幕上都放得下', () => {
             assert.ok(!overlap(a, b), `${where}：${na}和${nb}重叠了`);
           }
         }
+        // 静音开关在行李牌里面，够大（手指点得中）
+        assert.ok(inside(l.sound, l.header), `${where}：静音开关超出了行李牌`);
+        assert.ok(l.sound.w >= 32 && l.sound.h >= 32, `${where}：静音开关太小`);
         // 提手在箱子上面，格子在箱子里面
         assert.ok(l.board.handle.y + l.board.handle.h <= l.board.frame.y + 2 + EPS);
         assert.ok(inside(l.board.grid, l.board.frame), `${where}：格子超出了箱子`);

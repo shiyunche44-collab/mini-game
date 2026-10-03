@@ -32,6 +32,7 @@ import { easing, Tweens } from '../engine/tween.ts';
 import type { Platform, SharePayload } from '../platform/types.ts';
 import type { GuideKind } from './Guide.ts';
 import { PlayScene, type ButtonKind } from './PlayScene.ts';
+import { Sfx } from './Sfx.ts';
 import { WinOverlay } from './WinOverlay.ts';
 
 export interface SessionOptions {
@@ -43,7 +44,7 @@ export interface SessionOptions {
 
 type SessionPlatform = Pick<
   Platform,
-  'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track'
+  'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track' | 'audio'
 >;
 
 /** 前几关才有新手引导：之后的关卡玩家早就会了 */
@@ -85,6 +86,7 @@ export class Session implements GestureHandlers {
   private win: WinOverlay | null = null;
   private slide: Slide | null = null;
   private readonly tweens = new Tweens();
+  private readonly sfx: Sfx;
   /** 正在等插屏广告放完：这期间不响应触摸 */
   private busy = false;
   /** 这一关是什么时候开始玩的（platform.now()），算通关用时 */
@@ -97,6 +99,7 @@ export class Session implements GestureHandlers {
   constructor(platform: SessionPlatform, options: SessionOptions = {}) {
     this.platform = platform;
     this.persist = options.level === undefined;
+    this.sfx = new Sfx(platform);
     this.progress =
       options.level === undefined
         ? loadProgress(platform.storage.get(SAVE_KEY, null))
@@ -226,6 +229,9 @@ export class Session implements GestureHandlers {
         complete: () => this.onComplete(),
         button: (kind) => this.onButton(kind),
         taught: (kind) => void this.learned.add(kind),
+        sound: (name) => this.sfx.play(name),
+        muted: () => this.sfx.muted,
+        toggleSound: () => this.sfx.toggle(),
       },
       this.guideFor(game),
     );
@@ -264,6 +270,7 @@ export class Session implements GestureHandlers {
     const sidebar = this.sidebarUsable ? this.platform.sidebar : undefined;
     void recorder?.stop().catch(() => undefined);
     this.win = new WinOverlay(this.platform, layout, { level: cleared, hintsUsed: game.hintsUsed }, {
+      sound: (name) => this.sfx.play(name),
       next: () => void this.advance(cleared.n),
       share: () => {
         this.platform.track(EVENTS.shareClick, { kind: 'friend', level: cleared.n });
@@ -327,6 +334,7 @@ export class Session implements GestureHandlers {
 
   /** 换成当前进度的这一关：新的从右边滑进来，旧的（带着登机牌）滑出去 */
   private switchScene(): void {
+    this.sfx.play('slide');
     const slide: Slide = { from: this.scene, fromWin: this.win, p: 0 };
     this.scene = this.makeScene(this.newGame());
     this.win = null;

@@ -110,6 +110,8 @@ export function createWebPlatform(canvas: HTMLCanvasElement): Platform {
       },
     },
 
+    audio: createAudio(),
+
     share(payload): void {
       console.info('[分享]', payload.title, payload.query ?? '');
     },
@@ -147,6 +149,53 @@ const REWARD_TEXT: Record<RewardedPlacement, string> = {
 
 /** 同一时间只会有一个广告。已经有一个在播时再请求，当作没广告：返回 false，和接口约定一致 */
 let adOpen = false;
+
+/**
+ * 音效：用 WebAudio 的振荡器合成（ADR 0005）。浏览器要求用户操作之后才能出声，所以第一次播放时才创建
+ * （播放总是由点击或拖动触发的），被挂起就恢复。每个音符的增益先快速升上去再线性降到 0，避免"啪"的一声。
+ */
+function createAudio(): Platform['audio'] {
+  let ctx: AudioContext | null | undefined;
+  const get = (): AudioContext | null => {
+    if (ctx === undefined) {
+      try {
+        const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        ctx = Ctor ? new Ctor() : null;
+      } catch {
+        ctx = null;
+      }
+    }
+    return ctx;
+  };
+  return {
+    play(tones): void {
+      const audio = get();
+      if (!audio) return;
+      try {
+        if (audio.state === 'suspended') void audio.resume().catch(() => undefined);
+        const t0 = audio.currentTime;
+        for (const tone of tones) {
+          const at = t0 + tone.start / 1000;
+          const end = at + tone.duration / 1000;
+          const osc = audio.createOscillator();
+          const amp = audio.createGain();
+          osc.type = tone.wave;
+          osc.frequency.setValueAtTime(tone.freq, at);
+          if (tone.endFreq !== undefined) osc.frequency.linearRampToValueAtTime(tone.endFreq, end);
+          amp.gain.setValueAtTime(0, at);
+          amp.gain.linearRampToValueAtTime(tone.gain, at + 0.008);
+          amp.gain.linearRampToValueAtTime(0, end);
+          osc.connect(amp);
+          amp.connect(audio.destination);
+          osc.start(at);
+          osc.stop(end + 0.02);
+        }
+      } catch {
+        // 播不出来只是没声音，不该影响游戏
+      }
+    },
+  };
+}
 
 /**
  * 全屏弹层：暗幕里一张卡片，倒计时结束才出现"领取奖励"，右上角的 ✕ 随时可以关。

@@ -16,6 +16,7 @@ import type {
   SafeArea,
   ScreenInfo,
   SharePayload,
+  Tone,
   TextMetrics2D,
   TrackParams,
 } from '../src/platform/types.ts';
@@ -356,6 +357,15 @@ export class FakePlatform implements Platform {
     interstitial: (placement: InterstitialPlacement): Promise<void> => {
       this.adLog.push({ kind: 'interstitial', placement });
       return Promise.resolve();
+    },
+  };
+
+  // ---- 音效 ----
+  /** 每次 audio.play 的音符，按调用顺序 */
+  readonly played: (readonly Tone[])[] = [];
+  readonly audio = {
+    play: (tones: readonly Tone[]): void => {
+      this.played.push(tones);
     },
   };
 

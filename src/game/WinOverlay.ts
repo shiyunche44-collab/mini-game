@@ -8,6 +8,7 @@ import { fillRoundRect, roundRectPath, strokeRoundRect } from '../engine/draw.ts
 import { easing, Tweens } from '../engine/tween.ts';
 import type { Platform } from '../platform/types.ts';
 import { contains, type Layout, type Rect } from './layout.ts';
+import type { SoundName } from './sounds.ts';
 import { EMOJI_FONT, FONT, theme } from './theme.ts';
 
 const SETTLE_MS = 220;
@@ -47,6 +48,8 @@ export interface WinActions {
   shareVideo?: () => void;
   /** 只有平台支持侧边栏、并且当前能用时才有；没有就不画"加入侧边栏"按钮 */
   sidebar?: () => void;
+  /** 要播一个音效：盖章的闷响、登机牌出来的短旋律、点按钮的滴答 */
+  sound?: (name: SoundName) => void;
 }
 
 type ShareKind = 'share' | 'video' | 'sidebar';
@@ -68,6 +71,8 @@ export class WinOverlay {
   private used = false;
   /** 登机牌已经完全出来，可以点"下一站"了 */
   private ready = false;
+  /** 登机牌出来的旋律只响一次：玩家点屏幕跳过动画时补上，正常播完时在登机牌升起时响 */
+  private winPlayed = false;
 
   constructor(
     platform: Pick<Platform, 'ctx' | 'screen'>,
@@ -81,12 +86,32 @@ export class WinOverlay {
     this.actions = actions;
     this.tweens.animate(this.p, { lid: 1 }, { delay: SETTLE_MS, duration: LID_MS, ease: easing.easeOutCubic });
     this.tweens.animate(this.p, { stamp: 1 }, { delay: STAMP_DELAY_MS, duration: STAMP_MS, ease: easing.easeOutBack });
+    this.cue(STAMP_DELAY_MS, 'stamp');
+    this.cue(CARD_DELAY_MS, 'win');
     this.tweens.animate(this.p, { card: 1 }, {
       delay: CARD_DELAY_MS,
       duration: CARD_MS,
       ease: easing.easeOutCubic,
       onComplete: () => this.finish(),
     });
+  }
+
+  /** 到点播一个音效 */
+  private cue(delayMs: number, name: SoundName): void {
+    this.tweens.add({
+      delay: delayMs,
+      duration: 0,
+      onUpdate: () => undefined,
+      onComplete: () => this.play(name),
+    });
+  }
+
+  private play(name: SoundName): void {
+    if (name === 'win') {
+      if (this.winPlayed) return;
+      this.winPlayed = true;
+    }
+    this.actions.sound?.(name);
   }
 
   /** 登机牌是不是已经完全出来了（测试和 Session 用） */
@@ -105,12 +130,14 @@ export class WinOverlay {
       this.p.lid = 1;
       this.p.stamp = 1;
       this.p.card = 1;
+      this.play('win');
       this.finish();
       return;
     }
     if (this.used) return;
     if (contains(this.buttonRect(), x, y)) {
       this.used = true;
+      this.actions.sound?.('tap');
       this.actions.next();
       return;
     }
@@ -124,6 +151,7 @@ export class WinOverlay {
   }
 
   private press(kind: ShareKind): void {
+    this.actions.sound?.('tap');
     if (kind === 'share') this.actions.share();
     else if (kind === 'video') this.actions.shareVideo?.();
     else this.actions.sidebar?.();

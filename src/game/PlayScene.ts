@@ -18,6 +18,7 @@ import { Guide, type GuideKind } from './Guide.ts';
 import { boardCellAt, computeLayout, contains, type Layout, type Rect } from './layout.ts';
 import { drawPiece, drawPieceGhost, drawPieceGlow } from './pieceView.ts';
 import { findSnap, type Snap } from './snap.ts';
+import type { SoundName } from './sounds.ts';
 import { EMOJI_FONT, FONT, theme } from './theme.ts';
 
 /** 手指拿着物品时，物品比手指高出多少（单位：箱子里的格）：不然手指把物品遮住了，看不见要放哪 */
@@ -77,6 +78,12 @@ export interface SceneEvents {
   button(kind: ButtonKind): void;
   /** 玩家做了引导在演示的动作（拖过、转过）：外面记下来，以后的关卡不用再演示 */
   taught?(kind: GuideKind): void;
+  /** 要播一个音效。场景不管静音和平台，只说播哪个 */
+  sound?(name: SoundName): void;
+  /** 现在是不是静音（画标题栏里的开关用） */
+  muted?(): boolean;
+  /** 点了标题栏里的静音开关 */
+  toggleSound?(): void;
 }
 
 export type ButtonKind = 'restart' | 'hint' | 'skip';
@@ -169,8 +176,13 @@ export class PlayScene implements GestureHandlers {
   tap(x: number, y: number): void {
     if (this.dragged) return;
     this.guide?.touch();
+    if (contains(this.layout.sound, x, y)) {
+      this.events?.toggleSound?.();
+      return;
+    }
     const kind = this.buttonAt(x, y);
     if (kind) {
+      this.events?.sound?.('tap');
       this.events?.button(kind);
       // 放在通知之后：重来会清掉所有动画，先开始的话按钮的回弹也被一起清掉了
       this.startPress(kind);
@@ -183,10 +195,12 @@ export class PlayScene implements GestureHandlers {
     if (!this.game.level.rotate || piece.item.orients.length < 2) return;
     if (this.game.rotate(id)) {
       this.learn('rotate');
+      this.events?.sound?.('rotate');
       this.glows.delete(id); // 转过之后光的形状就不对了
       this.startSpin(id);
       this.events?.change();
     } else {
+      this.events?.sound?.('nope');
       this.startShake(id);
     }
   }
@@ -216,6 +230,7 @@ export class PlayScene implements GestureHandlers {
     const fy = clamp01((e.startY - origin.y) / (o.h * fromCell));
 
     this.learn('drag');
+    this.events?.sound?.('pickup');
     const d: Dragged = { id, from, fx, fy, fromCell, x: e.x, y: e.y, t: from ? 1 : 0, snap: null };
     d.snap = this.snapFor(d);
     this.dragged = d;
@@ -267,14 +282,18 @@ export class PlayScene implements GestureHandlers {
       target = { x: board.grid.x + d.snap.c * board.cell, y: board.grid.y + d.snap.r * board.cell, k: board.cell };
       ms = DROP_MS;
       changed = true;
+      this.events?.sound?.('drop');
     } else if (where === 'tray' && d.from) {
       this.game.remove(d.id);
       changed = true;
       target = { ...this.trayOrigin(d.id), k: tray.cell };
+      this.events?.sound?.('back');
     } else if (d.from) {
       target = { x: board.grid.x + d.from.c * board.cell, y: board.grid.y + d.from.r * board.cell, k: board.cell };
+      if (where !== null) this.events?.sound?.('back');
     } else {
       target = { ...this.trayOrigin(d.id), k: tray.cell };
+      if (where !== null) this.events?.sound?.('back');
     }
     this.fly(d.id, from, target, ms);
 
@@ -452,6 +471,7 @@ export class PlayScene implements GestureHandlers {
 
   /** 物品落进答案的位置之后，在它身上闪两下光再暗下去 */
   private startGlow(id: number): void {
+    this.events?.sound?.('hint');
     const glow: Glow = { a: 1 };
     this.glows.set(id, glow);
     this.tweens.add({
@@ -611,7 +631,17 @@ export class PlayScene implements GestureHandlers {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    // 右端：静音开关；"第 N 关"在它左边。城市名放不下时压窄（fillText 的最大宽度）
+    const { sound } = this.layout;
+    const levelText = `第 ${level.n} 关`;
     ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = theme.tagAccent;
+    ctx.font = `bold 18px ${FONT}`;
+    const levelRight = sound.x - 8;
+    ctx.fillText(levelText, levelRight, h.y + h.h / 2);
+    const levelLeft = levelRight - ctx.measureText(levelText).width;
+
     ctx.textAlign = 'left';
     ctx.fillStyle = theme.ink;
     ctx.font = `bold 28px ${FONT}`;
@@ -619,12 +649,24 @@ export class PlayScene implements GestureHandlers {
     const codeW = ctx.measureText(level.dest.code).width;
     ctx.font = `15px ${FONT}`;
     ctx.fillStyle = theme.inkSoft;
-    ctx.fillText(level.dest.city, h.x + 46 + codeW + 10, h.y + h.h / 2 + 3);
+    const cityX = h.x + 46 + codeW + 10;
+    ctx.fillText(level.dest.city, cityX, h.y + h.h / 2 + 3, Math.max(0, levelLeft - 8 - cityX));
 
-    ctx.textAlign = 'right';
-    ctx.fillStyle = theme.tagAccent;
-    ctx.font = `bold 18px ${FONT}`;
-    ctx.fillText(`第 ${level.n} 关`, h.x + h.w - 16, h.y + h.h / 2);
+    this.drawSoundButton(ctx, sound);
+  }
+
+  /** 静音开关：浅色圆底加喇叭 emoji，静音时是划掉的喇叭 */
+  private drawSoundButton(ctx: Platform['ctx'], r: Rect): void {
+    const muted = this.events?.muted?.() ?? false;
+    ctx.beginPath();
+    ctx.arc(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, 0, Math.PI * 2);
+    ctx.fillStyle = muted ? theme.soundOff : theme.soundOn;
+    ctx.fill();
+    ctx.font = `18px ${EMOJI_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#000000';
+    ctx.fillText(muted ? '🔇' : '🔊', r.x + r.w / 2, r.y + r.h / 2 + 1);
   }
 
   private drawTip(ctx: Platform['ctx']): void {

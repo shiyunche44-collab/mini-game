@@ -18,6 +18,8 @@ export interface Layout {
   readonly content: Rect;
   /** 行李牌 */
   readonly header: Rect;
+  /** 行李牌右端的静音开关，在 header 里面 */
+  readonly sound: Rect;
   /** 教学提示，这一关没有就是 null */
   readonly tip: Rect | null;
   readonly board: {
@@ -44,6 +46,7 @@ export const MAX_CONTENT_WIDTH = 440;
 const MARGIN = 12;
 const GAP = 12;
 const HEADER_H = 60;
+const SOUND_SIZE = 36;
 const TIP_H = 24;
 const BUTTON_H = 48;
 const HANDLE_H = 10;
@@ -68,6 +71,7 @@ export function computeLayout(screen: ScreenInfo, level: Level): Layout {
   const content: Rect = { x, y: top, w, h: bottom - top };
 
   const header: Rect = { x, y: top, w, h: HEADER_H };
+  const sound: Rect = { x: x + w - 10 - SOUND_SIZE, y: top + (HEADER_H - SOUND_SIZE) / 2, w: SOUND_SIZE, h: SOUND_SIZE };
   let y = top + HEADER_H + GAP;
   let tip: Rect | null = null;
   if (level.tip) {
@@ -135,7 +139,7 @@ export function computeLayout(screen: ScreenInfo, level: Level): Layout {
   const panelY = areaTop + b.totalH + GAP;
   const panel: Rect = { x, y: panelY, w, h: buttonY - GAP - panelY };
 
-  return { content, header, tip, board, tray: { panel, cell: tray.cell, slots: tray.slots }, buttons };
+  return { content, header, sound, tip, board, tray: { panel, cell: tray.cell, slots: tray.slots }, buttons };
 }
 
 /** 箱子外壳比格子区域宽出来的边 */

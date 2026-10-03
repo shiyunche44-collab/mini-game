@@ -153,6 +153,21 @@ export interface SharePayload {
 export type TrackParams = Readonly<Record<string, string | number | boolean>>;
 
 // ---------------------------------------------------------------------------
+// 音效（ADR 0005）：游戏层给出音符，平台负责发声
+// ---------------------------------------------------------------------------
+
+/** 一个音符：从 start 毫秒开始，持续 duration 毫秒，音高从 freq（赫兹）滑到 endFreq（不写就不滑） */
+export interface Tone {
+  readonly freq: number;
+  readonly endFreq?: number;
+  readonly start: number;
+  readonly duration: number;
+  /** 音量 0～1 */
+  readonly gain: number;
+  readonly wave: 'sine' | 'triangle' | 'square';
+}
+
+// ---------------------------------------------------------------------------
 // Platform
 // ---------------------------------------------------------------------------
 
@@ -182,6 +197,11 @@ export interface Platform {
     rewarded(placement: RewardedPlacement): Promise<boolean>;
     /** 展示结束（或没展示成功）后返回，不会抛异常。 */
     interstitial(placement: InterstitialPlacement): Promise<void>;
+  };
+
+  readonly audio: {
+    /** 同时播放一组音符。没有声音能力、被系统静音、出任何错都不抛异常，当作没播。 */
+    play(tones: readonly Tone[]): void;
   };
 
   share(payload: SharePayload): void;
