@@ -14,6 +14,7 @@ import { fillRoundRect, roundRectPath, strokeRoundRect } from '../engine/draw.ts
 import type { DragEvent, GestureHandlers } from '../engine/input.ts';
 import { easing, Tweens, wave, type TweenHandle } from '../engine/tween.ts';
 import type { Platform } from '../platform/types.ts';
+import { Guide, type GuideKind } from './Guide.ts';
 import { boardCellAt, computeLayout, contains, type Layout, type Rect } from './layout.ts';
 import { drawPiece, drawPieceGhost, drawPieceGlow } from './pieceView.ts';
 import { findSnap, type Snap } from './snap.ts';
@@ -74,6 +75,8 @@ export interface SceneEvents {
   complete(): void;
   /** 点了底部的按钮。重来的事场景自己做不了主（要不要问广告、存档），所以都交给外面决定 */
   button(kind: ButtonKind): void;
+  /** 玩家做了引导在演示的动作（拖过、转过）：外面记下来，以后的关卡不用再演示 */
+  taught?(kind: GuideKind): void;
 }
 
 export type ButtonKind = 'restart' | 'hint' | 'skip';
@@ -113,17 +116,31 @@ export class PlayScene implements GestureHandlers {
   private readonly shakes = new Map<number, Shake>();
   private readonly presses = new Map<ButtonKind, Press>();
   private readonly glows = new Map<number, Glow>();
+  /** 新手引导：玩家愣着不动时演示下一步。玩家做过这个动作就撤掉，这一关不再出现 */
+  private guide: Guide | null;
 
-  constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game, events?: SceneEvents) {
+  constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game, events?: SceneEvents, guide: GuideKind | null = null) {
     this.platform = platform;
     this.game = game;
     this.events = events;
     this.layout = computeLayout(platform.screen, game.level);
+    this.guide = guide ? new Guide(platform, this.layout, game, guide) : null;
   }
 
   /** 推进动画。dtMs 是主循环给的帧间隔 */
   update(dtMs: number): void {
     this.tweens.update(dtMs);
+    this.guide?.update(dtMs);
+  }
+
+  /** 引导现在是不是正在演示（测试用） */
+  get guiding(): GuideKind | null {
+    return this.guide?.playing ? this.guide.kind : null;
+  }
+
+  private learn(kind: GuideKind): void {
+    this.events?.taught?.(kind);
+    if (this.guide?.kind === kind) this.guide = null;
   }
 
   render(): void {
@@ -141,6 +158,8 @@ export class PlayScene implements GestureHandlers {
     this.drawGhost(ctx);
     for (const [id, f] of this.flights) this.drawPieceAt(ctx, id, f.x, f.y, f.k, f.lift);
     if (this.dragged) this.drawDragged(ctx, this.dragged);
+    // 东西在飞、在拖的时候不演示：手和真的物品一起动会乱
+    else if (this.flights.size === 0 && !this.game.isComplete()) this.guide?.render();
   }
 
   // -------------------------------------------------------------------------
@@ -149,6 +168,7 @@ export class PlayScene implements GestureHandlers {
 
   tap(x: number, y: number): void {
     if (this.dragged) return;
+    this.guide?.touch();
     const kind = this.buttonAt(x, y);
     if (kind) {
       this.events?.button(kind);
@@ -162,6 +182,7 @@ export class PlayScene implements GestureHandlers {
     // 这一关不让转，或者怎么转都是同一个形状（2×2 的书）：没什么可转的，不给反馈
     if (!this.game.level.rotate || piece.item.orients.length < 2) return;
     if (this.game.rotate(id)) {
+      this.learn('rotate');
       this.glows.delete(id); // 转过之后光的形状就不对了
       this.startSpin(id);
       this.events?.change();
@@ -194,6 +215,7 @@ export class PlayScene implements GestureHandlers {
     const fx = clamp01((e.startX - origin.x) / (o.w * fromCell));
     const fy = clamp01((e.startY - origin.y) / (o.h * fromCell));
 
+    this.learn('drag');
     const d: Dragged = { id, from, fx, fy, fromCell, x: e.x, y: e.y, t: from ? 1 : 0, snap: null };
     d.snap = this.snapFor(d);
     this.dragged = d;
@@ -203,6 +225,7 @@ export class PlayScene implements GestureHandlers {
   dragMove(e: DragEvent): void {
     const d = this.dragged;
     if (!d) return;
+    this.guide?.touch();
     d.x = e.x;
     d.y = e.y;
     d.snap = this.snapFor(d);
@@ -278,6 +301,7 @@ export class PlayScene implements GestureHandlers {
    * 箱子里本来就是空的，什么都没变，不通知外面（不然白白存一次档）。
    */
   restart(): void {
+    this.guide?.touch();
     const moved = this.game.pieces.filter((p) => p.pos).map((p) => ({ id: p.id, from: this.geometry(p.id) }));
     this.clearAnimations();
     this.game.reset();
@@ -290,6 +314,7 @@ export class PlayScene implements GestureHandlers {
    * 返回有没有摆（所有物品都摆对了就没有可摆的）。
    */
   applyHint(): boolean {
+    this.guide?.touch();
     const before = new Map(this.game.pieces.map((p) => [p.id, this.geometry(p.id)]));
     const result = this.game.hint();
     if (!result) return false;

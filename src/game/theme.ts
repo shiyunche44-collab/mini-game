@@ -52,4 +52,8 @@ export const theme = {
 
   /** 提示摆好的物品身上闪的光 */
   hintGlow: '#fff2a8',
+
+  /** 新手引导：手指下面的触点、点按时荡开的涟漪 */
+  guideDot: 'rgba(74, 55, 40, 0.28)',
+  guideRipple: '#e8604c',
 } as const;

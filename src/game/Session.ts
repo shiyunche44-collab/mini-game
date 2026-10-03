@@ -30,6 +30,7 @@ import {
 import type { DragEvent, GestureHandlers } from '../engine/input.ts';
 import { easing, Tweens } from '../engine/tween.ts';
 import type { Platform, SharePayload } from '../platform/types.ts';
+import type { GuideKind } from './Guide.ts';
 import { PlayScene, type ButtonKind } from './PlayScene.ts';
 import { WinOverlay } from './WinOverlay.ts';
 
@@ -44,6 +45,9 @@ type SessionPlatform = Pick<
   Platform,
   'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track'
 >;
+
+/** 前几关才有新手引导：之后的关卡玩家早就会了 */
+export const GUIDE_LAST_LEVEL = 3;
 
 /** 换关滑动的时长（毫秒）：太短看不出来，太长玩家等着不耐烦 */
 export const SLIDE_MS = 300;
@@ -87,6 +91,8 @@ export class Session implements GestureHandlers {
   private levelStartedAt = 0;
   /** 平台问过了，当前能放"加入侧边栏"的入口。问是异步的，答案回来之前登机牌不画这个按钮 */
   private sidebarUsable = false;
+  /** 这次打开游戏之后，玩家做过哪些引导演示的动作。不存档：重新打开最多多演示一次，换来存档格式不变 */
+  private readonly learned = new Set<GuideKind>();
 
   constructor(platform: SessionPlatform, options: SessionOptions = {}) {
     this.platform = platform;
@@ -212,11 +218,27 @@ export class Session implements GestureHandlers {
     this.platform.track(EVENTS.levelStart, { level: game.level.n });
     // 每一关开始时录（已经在录就接着录，平台自己处理），通关时停，登机牌上才能分享这一段
     this.platform.recorder?.start();
-    return new PlayScene(this.platform, game, {
-      change: () => this.onChange(),
-      complete: () => this.onComplete(),
-      button: (kind) => this.onButton(kind),
-    });
+    return new PlayScene(
+      this.platform,
+      game,
+      {
+        change: () => this.onChange(),
+        complete: () => this.onComplete(),
+        button: (kind) => this.onButton(kind),
+        taught: (kind) => void this.learned.add(kind),
+      },
+      this.guideFor(game),
+    );
+  }
+
+  /**
+   * 这一关演示什么：先教旋转（能转的关卡里玩家没转过），再教拖动（没拖过）；都会了就不演示。
+   * 第 1 关不能旋转，所以只演示拖动。
+   */
+  private guideFor(game: Game): GuideKind | null {
+    if (game.level.n > GUIDE_LAST_LEVEL) return null;
+    if (game.level.rotate && !this.learned.has('rotate')) return 'rotate';
+    return this.learned.has('drag') ? null : 'drag';
   }
 
   private save(): void {
