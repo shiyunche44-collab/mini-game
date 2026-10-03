@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { GENERATOR_VERSION } from '../src/core/levels.ts';
 import { INTERSTITIAL_MIN_GAP_MS, newProgress, SAVE_KEY, type Progress } from '../src/core/progress.ts';
+import { SLIDE_MS } from '../src/game/Session.ts';
 import { NEXT_LABEL } from '../src/game/WinOverlay.ts';
 import { FakePlatform } from './fake-platform.ts';
 import {
@@ -210,6 +211,7 @@ describe('下一站：插屏广告', () => {
     s.p.advance(3000);
     tapNext(s);
     await flush();
+    s.p.advance(SLIDE_MS); // 换关滑动期间不响应触摸
   };
 
   it('通关第 5 关后弹插屏，弹完才进下一关，并记下弹的时间', async () => {

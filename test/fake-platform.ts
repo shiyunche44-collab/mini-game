@@ -16,6 +16,7 @@ import type {
   SafeArea,
   ScreenInfo,
   SharePayload,
+  Tone,
   TextMetrics2D,
   TrackParams,
 } from '../src/platform/types.ts';
@@ -356,6 +357,45 @@ export class FakePlatform implements Platform {
     interstitial: (placement: InterstitialPlacement): Promise<void> => {
       this.adLog.push({ kind: 'interstitial', placement });
       return Promise.resolve();
+    },
+  };
+
+  // ---- 读图 ----
+  /** 假装产物里有这些图（路径）。没在里面的读出来是 null */
+  readonly imageFiles = new Set<string>();
+  /** 每次 loadImage 请求的路径，按调用顺序 */
+  readonly imageRequests: string[] = [];
+  /** 读到的图。同一个路径每次给同一个对象，测试可以按引用对 */
+  readonly images = new Map<string, ImageSource>();
+  /** 设成 true 时，读图不会自己完成，要测试调用 releaseImages */
+  holdImages = false;
+  private heldImages: (() => void)[] = [];
+
+  loadImage(path: string): Promise<ImageSource | null> {
+    this.imageRequests.push(path);
+    return new Promise((resolve) => {
+      const done = (): void => {
+        if (!this.imageFiles.has(path)) return resolve(null);
+        let img = this.images.get(path);
+        if (!img) this.images.set(path, (img = { width: 192, height: 192 }));
+        resolve(img);
+      };
+      if (this.holdImages) this.heldImages.push(done);
+      else done();
+    });
+  }
+  /** 让被拦住的读图都完成 */
+  releaseImages(): void {
+    this.holdImages = false;
+    for (const done of this.heldImages.splice(0)) done();
+  }
+
+  // ---- 音效 ----
+  /** 每次 audio.play 的音符，按调用顺序 */
+  readonly played: (readonly Tone[])[] = [];
+  readonly audio = {
+    play: (tones: readonly Tone[]): void => {
+      this.played.push(tones);
     },
   };
 

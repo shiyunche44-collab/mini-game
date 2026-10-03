@@ -14,9 +14,12 @@ import { fillRoundRect, roundRectPath, strokeRoundRect } from '../engine/draw.ts
 import type { DragEvent, GestureHandlers } from '../engine/input.ts';
 import { easing, Tweens, wave, type TweenHandle } from '../engine/tween.ts';
 import type { Platform } from '../platform/types.ts';
+import { Guide, type GuideKind } from './Guide.ts';
 import { boardCellAt, computeLayout, contains, type Layout, type Rect } from './layout.ts';
-import { drawPiece, drawPieceGhost } from './pieceView.ts';
+import type { ItemIcons } from './icons.ts';
+import { drawPiece, drawPieceGhost, drawPieceGlow } from './pieceView.ts';
 import { findSnap, type Snap } from './snap.ts';
+import type { SoundName } from './sounds.ts';
 import { EMOJI_FONT, FONT, theme } from './theme.ts';
 
 /** 手指拿着物品时，物品比手指高出多少（单位：箱子里的格）：不然手指把物品遮住了，看不见要放哪 */
@@ -33,6 +36,12 @@ const SHAKE_MS = 300;
 /** 抖动的来回次数，幅度（单位：格）。抖得太大会盖到旁边的物品 */
 const SHAKE_CYCLES = 3;
 export const SHAKE_CELLS = 0.12;
+/** 点按钮时按钮缩下去再弹回来：缩到原来的多少，一共多久 */
+export const PRESS_SCALE = 0.92;
+const PRESS_MS = 160;
+/** 提示摆好的物品落稳后闪一下：让玩家知道"就是这件"。闪的时间要比提示飞过去的 220ms 长，不然一闪而过 */
+const GLOW_MS = 900;
+const GLOW_PULSES = 2;
 
 /** 正被手指拿着的物品 */
 interface Dragged {
@@ -68,6 +77,14 @@ export interface SceneEvents {
   complete(): void;
   /** 点了底部的按钮。重来的事场景自己做不了主（要不要问广告、存档），所以都交给外面决定 */
   button(kind: ButtonKind): void;
+  /** 玩家做了引导在演示的动作（拖过、转过）：外面记下来，以后的关卡不用再演示 */
+  taught?(kind: GuideKind): void;
+  /** 要播一个音效。场景不管静音和平台，只说播哪个 */
+  sound?(name: SoundName): void;
+  /** 现在是不是静音（画标题栏里的开关用） */
+  muted?(): boolean;
+  /** 点了标题栏里的静音开关 */
+  toggleSound?(): void;
 }
 
 export type ButtonKind = 'restart' | 'hint' | 'skip';
@@ -84,6 +101,16 @@ interface Shake {
   handle: TweenHandle | null;
 }
 
+/** 被按下的按钮：s 是按下的程度 0～1，0 是原样，1 是缩得最小 */
+interface Press {
+  s: number;
+}
+
+/** 提示摆好的物品身上的光：a 是亮度 0～1，从亮到暗 */
+interface Glow {
+  a: number;
+}
+
 export class PlayScene implements GestureHandlers {
   private readonly platform: Pick<Platform, 'ctx' | 'screen'>;
   readonly game: Game;
@@ -95,17 +122,42 @@ export class PlayScene implements GestureHandlers {
   private readonly flights = new Map<number, Flight>();
   private readonly spins = new Map<number, Spin>();
   private readonly shakes = new Map<number, Shake>();
+  private readonly presses = new Map<ButtonKind, Press>();
+  private readonly glows = new Map<number, Glow>();
+  /** 新手引导：玩家愣着不动时演示下一步。玩家做过这个动作就撤掉，这一关不再出现 */
+  private guide: Guide | null;
+  /** 物品图标，没有就画 emoji */
+  private readonly icons: ItemIcons | undefined;
 
-  constructor(platform: Pick<Platform, 'ctx' | 'screen'>, game: Game, events?: SceneEvents) {
+  constructor(
+    platform: Pick<Platform, 'ctx' | 'screen'>,
+    game: Game,
+    events?: SceneEvents,
+    guide: GuideKind | null = null,
+    icons?: ItemIcons,
+  ) {
+    this.icons = icons;
     this.platform = platform;
     this.game = game;
     this.events = events;
     this.layout = computeLayout(platform.screen, game.level);
+    this.guide = guide ? new Guide(platform, this.layout, game, guide, icons) : null;
   }
 
   /** 推进动画。dtMs 是主循环给的帧间隔 */
   update(dtMs: number): void {
     this.tweens.update(dtMs);
+    this.guide?.update(dtMs);
+  }
+
+  /** 引导现在是不是正在演示（测试用） */
+  get guiding(): GuideKind | null {
+    return this.guide?.playing ? this.guide.kind : null;
+  }
+
+  private learn(kind: GuideKind): void {
+    this.events?.taught?.(kind);
+    if (this.guide?.kind === kind) this.guide = null;
   }
 
   render(): void {
@@ -123,6 +175,8 @@ export class PlayScene implements GestureHandlers {
     this.drawGhost(ctx);
     for (const [id, f] of this.flights) this.drawPieceAt(ctx, id, f.x, f.y, f.k, f.lift);
     if (this.dragged) this.drawDragged(ctx, this.dragged);
+    // 东西在飞、在拖的时候不演示：手和真的物品一起动会乱
+    else if (this.flights.size === 0 && !this.game.isComplete()) this.guide?.render();
   }
 
   // -------------------------------------------------------------------------
@@ -131,9 +185,17 @@ export class PlayScene implements GestureHandlers {
 
   tap(x: number, y: number): void {
     if (this.dragged) return;
+    this.guide?.touch();
+    if (contains(this.layout.sound, x, y)) {
+      this.events?.toggleSound?.();
+      return;
+    }
     const kind = this.buttonAt(x, y);
     if (kind) {
+      this.events?.sound?.('tap');
       this.events?.button(kind);
+      // 放在通知之后：重来会清掉所有动画，先开始的话按钮的回弹也被一起清掉了
+      this.startPress(kind);
       return;
     }
     const id = this.pieceAtPoint(x, y);
@@ -142,9 +204,13 @@ export class PlayScene implements GestureHandlers {
     // 这一关不让转，或者怎么转都是同一个形状（2×2 的书）：没什么可转的，不给反馈
     if (!this.game.level.rotate || piece.item.orients.length < 2) return;
     if (this.game.rotate(id)) {
+      this.learn('rotate');
+      this.events?.sound?.('rotate');
+      this.glows.delete(id); // 转过之后光的形状就不对了
       this.startSpin(id);
       this.events?.change();
     } else {
+      this.events?.sound?.('nope');
       this.startShake(id);
     }
   }
@@ -164,6 +230,7 @@ export class PlayScene implements GestureHandlers {
     this.spins.delete(id);
     this.shakes.get(id)?.handle?.cancel();
     this.shakes.delete(id);
+    this.glows.delete(id);
     const fromCell = from ? board.cell : tray.cell;
     const origin = from
       ? { x: board.grid.x + from.c * board.cell, y: board.grid.y + from.r * board.cell }
@@ -172,6 +239,8 @@ export class PlayScene implements GestureHandlers {
     const fx = clamp01((e.startX - origin.x) / (o.w * fromCell));
     const fy = clamp01((e.startY - origin.y) / (o.h * fromCell));
 
+    this.learn('drag');
+    this.events?.sound?.('pickup');
     const d: Dragged = { id, from, fx, fy, fromCell, x: e.x, y: e.y, t: from ? 1 : 0, snap: null };
     d.snap = this.snapFor(d);
     this.dragged = d;
@@ -181,6 +250,7 @@ export class PlayScene implements GestureHandlers {
   dragMove(e: DragEvent): void {
     const d = this.dragged;
     if (!d) return;
+    this.guide?.touch();
     d.x = e.x;
     d.y = e.y;
     d.snap = this.snapFor(d);
@@ -222,14 +292,18 @@ export class PlayScene implements GestureHandlers {
       target = { x: board.grid.x + d.snap.c * board.cell, y: board.grid.y + d.snap.r * board.cell, k: board.cell };
       ms = DROP_MS;
       changed = true;
+      this.events?.sound?.('drop');
     } else if (where === 'tray' && d.from) {
       this.game.remove(d.id);
       changed = true;
       target = { ...this.trayOrigin(d.id), k: tray.cell };
+      this.events?.sound?.('back');
     } else if (d.from) {
       target = { x: board.grid.x + d.from.c * board.cell, y: board.grid.y + d.from.r * board.cell, k: board.cell };
+      if (where !== null) this.events?.sound?.('back');
     } else {
       target = { ...this.trayOrigin(d.id), k: tray.cell };
+      if (where !== null) this.events?.sound?.('back');
     }
     this.fly(d.id, from, target, ms);
 
@@ -256,6 +330,7 @@ export class PlayScene implements GestureHandlers {
    * 箱子里本来就是空的，什么都没变，不通知外面（不然白白存一次档）。
    */
   restart(): void {
+    this.guide?.touch();
     const moved = this.game.pieces.filter((p) => p.pos).map((p) => ({ id: p.id, from: this.geometry(p.id) }));
     this.clearAnimations();
     this.game.reset();
@@ -268,6 +343,7 @@ export class PlayScene implements GestureHandlers {
    * 返回有没有摆（所有物品都摆对了就没有可摆的）。
    */
   applyHint(): boolean {
+    this.guide?.touch();
     const before = new Map(this.game.pieces.map((p) => [p.id, this.geometry(p.id)]));
     const result = this.game.hint();
     if (!result) return false;
@@ -280,7 +356,8 @@ export class PlayScene implements GestureHandlers {
     if (placed?.pos && o && origin) {
       // 提示可能把物品转到答案的朝向：起点按旧位置的中心、新朝向的大小算，这样不会在起跳时突然换形状
       const from = { x: origin.cx - (o.w * origin.k) / 2, y: origin.cy - (o.h * origin.k) / 2, k: origin.k, lift: 0 };
-      this.fly(result.id, from, { x: board.grid.x + placed.pos.c * board.cell, y: board.grid.y + placed.pos.r * board.cell, k: board.cell }, HINT_MS);
+      const id = result.id;
+      this.fly(id, from, { x: board.grid.x + placed.pos.c * board.cell, y: board.grid.y + placed.pos.r * board.cell, k: board.cell }, HINT_MS, () => this.startGlow(id));
     }
     for (const id of result.kicked) {
       const o2 = before.get(id);
@@ -318,6 +395,7 @@ export class PlayScene implements GestureHandlers {
     from: { x: number; y: number; k: number; lift: number },
     target: { x: number; y: number; k: number },
     ms: number,
+    onLand?: () => void,
   ): void {
     this.spins.get(id)?.handle?.cancel();
     this.spins.delete(id);
@@ -328,7 +406,10 @@ export class PlayScene implements GestureHandlers {
     this.tweens.animate(flight, { ...target, lift: 0 }, {
       duration: ms,
       ease: easing.easeOutCubic,
-      onComplete: () => void this.flights.delete(id),
+      onComplete: () => {
+        this.flights.delete(id);
+        onLand?.();
+      },
     });
   }
 
@@ -338,6 +419,8 @@ export class PlayScene implements GestureHandlers {
     this.flights.clear();
     this.spins.clear();
     this.shakes.clear();
+    this.presses.clear();
+    this.glows.clear();
     this.dragged = null;
     this.pickup = null;
   }
@@ -380,6 +463,38 @@ export class PlayScene implements GestureHandlers {
     });
   }
 
+  /** 按钮缩下去再弹回来。连点时从头再来 */
+  private startPress(kind: ButtonKind): void {
+    const press: Press = { s: 0 };
+    this.presses.set(kind, press);
+    this.tweens.add({
+      duration: PRESS_MS,
+      onUpdate: (p) => {
+        // 前 40% 缩下去，后 60% 弹回来
+        press.s = p < 0.4 ? p / 0.4 : (1 - p) / 0.6;
+      },
+      onComplete: () => {
+        if (this.presses.get(kind) === press) this.presses.delete(kind);
+      },
+    });
+  }
+
+  /** 物品落进答案的位置之后，在它身上闪两下光再暗下去 */
+  private startGlow(id: number): void {
+    this.events?.sound?.('hint');
+    const glow: Glow = { a: 1 };
+    this.glows.set(id, glow);
+    this.tweens.add({
+      duration: GLOW_MS,
+      onUpdate: (p) => {
+        glow.a = (1 - p) * (0.65 + 0.35 * wave(p, GLOW_PULSES));
+      },
+      onComplete: () => {
+        if (this.glows.get(id) === glow) this.glows.delete(id);
+      },
+    });
+  }
+
   /** 画一件停在托盘或箱子里的物品，带上它正在播的转动和抖动 */
   private drawResting(ctx: Platform['ctx'], id: number, x: number, y: number, cell: number): void {
     const piece = this.game.pieces[id];
@@ -387,7 +502,7 @@ export class PlayScene implements GestureHandlers {
     const spin = this.spins.get(id);
     const shake = this.shakes.get(id);
     if (!spin && !shake) {
-      drawPiece(ctx, piece, x, y, cell);
+      drawPiece(ctx, piece, x, y, cell, 0, this.icons);
       return;
     }
     const o = piece.item.orients[piece.oi];
@@ -401,7 +516,7 @@ export class PlayScene implements GestureHandlers {
       ctx.rotate(spin.angle);
       ctx.translate(-cx, -cy);
     }
-    drawPiece(ctx, piece, x, y, cell);
+    drawPiece(ctx, piece, x, y, cell, 0, this.icons);
     ctx.restore();
   }
 
@@ -469,7 +584,7 @@ export class PlayScene implements GestureHandlers {
 
   private drawPieceAt(ctx: Platform['ctx'], id: number, x: number, y: number, k: number, lift: number): void {
     const piece = this.game.pieces[id];
-    if (piece) drawPiece(ctx, piece, x, y, k, lift);
+    if (piece) drawPiece(ctx, piece, x, y, k, lift, this.icons);
   }
 
   private drawDragged(ctx: Platform['ctx'], d: Dragged): void {
@@ -484,7 +599,7 @@ export class PlayScene implements GestureHandlers {
     const piece = d && this.game.pieces[d.id];
     if (!d?.snap || !piece) return;
     const { board } = this.layout;
-    drawPieceGhost(ctx, piece, board.grid.x + d.snap.c * board.cell, board.grid.y + d.snap.r * board.cell, board.cell, GHOST_ALPHA);
+    drawPieceGhost(ctx, piece, board.grid.x + d.snap.c * board.cell, board.grid.y + d.snap.r * board.cell, board.cell, GHOST_ALPHA, this.icons);
   }
 
   private drawBackground(): void {
@@ -526,7 +641,17 @@ export class PlayScene implements GestureHandlers {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    // 右端：静音开关；"第 N 关"在它左边。城市名放不下时压窄（fillText 的最大宽度）
+    const { sound } = this.layout;
+    const levelText = `第 ${level.n} 关`;
     ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = theme.tagAccent;
+    ctx.font = `bold 18px ${FONT}`;
+    const levelRight = sound.x - 8;
+    ctx.fillText(levelText, levelRight, h.y + h.h / 2);
+    const levelLeft = levelRight - ctx.measureText(levelText).width;
+
     ctx.textAlign = 'left';
     ctx.fillStyle = theme.ink;
     ctx.font = `bold 28px ${FONT}`;
@@ -534,12 +659,24 @@ export class PlayScene implements GestureHandlers {
     const codeW = ctx.measureText(level.dest.code).width;
     ctx.font = `15px ${FONT}`;
     ctx.fillStyle = theme.inkSoft;
-    ctx.fillText(level.dest.city, h.x + 46 + codeW + 10, h.y + h.h / 2 + 3);
+    const cityX = h.x + 46 + codeW + 10;
+    ctx.fillText(level.dest.city, cityX, h.y + h.h / 2 + 3, Math.max(0, levelLeft - 8 - cityX));
 
-    ctx.textAlign = 'right';
-    ctx.fillStyle = theme.tagAccent;
-    ctx.font = `bold 18px ${FONT}`;
-    ctx.fillText(`第 ${level.n} 关`, h.x + h.w - 16, h.y + h.h / 2);
+    this.drawSoundButton(ctx, sound);
+  }
+
+  /** 静音开关：浅色圆底加喇叭 emoji，静音时是划掉的喇叭 */
+  private drawSoundButton(ctx: Platform['ctx'], r: Rect): void {
+    const muted = this.events?.muted?.() ?? false;
+    ctx.beginPath();
+    ctx.arc(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, 0, Math.PI * 2);
+    ctx.fillStyle = muted ? theme.soundOff : theme.soundOn;
+    ctx.fill();
+    ctx.font = `18px ${EMOJI_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#000000';
+    ctx.fillText(muted ? '🔇' : '🔊', r.x + r.w / 2, r.y + r.h / 2 + 1);
   }
 
   private drawTip(ctx: Platform['ctx']): void {
@@ -586,6 +723,10 @@ export class PlayScene implements GestureHandlers {
     for (const p of this.game.pieces) {
       if (p.pos && !away.has(p.id)) this.drawResting(ctx, p.id, grid.x + p.pos.c * cell, grid.y + p.pos.r * cell, cell);
     }
+    for (const [id, glow] of this.glows) {
+      const p = this.game.pieces[id];
+      if (p?.pos && !away.has(id)) drawPieceGlow(ctx, p, grid.x + p.pos.c * cell, grid.y + p.pos.r * cell, cell, glow.a, theme.hintGlow);
+    }
   }
 
   private drawTray(ctx: Platform['ctx'], away: ReadonlySet<number>): void {
@@ -612,16 +753,27 @@ export class PlayScene implements GestureHandlers {
 
   private drawButtons(ctx: Platform['ctx']): void {
     const { restart, hint, skip } = this.layout.buttons;
-    this.drawButton(ctx, restart, '🔄', '重来', theme.buttonFree, false);
-    this.drawButton(ctx, hint, '💡', '提示', theme.buttonHint, true);
-    this.drawButton(ctx, skip, '⏭', '跳关', theme.buttonSkip, true);
+    this.drawButton(ctx, restart, '🔄', '重来', theme.buttonFree, false, this.presses.get('restart')?.s ?? 0);
+    this.drawButton(ctx, hint, '💡', '提示', theme.buttonHint, true, this.presses.get('hint')?.s ?? 0);
+    this.drawButton(ctx, skip, '⏭', '跳关', theme.buttonSkip, true, this.presses.get('skip')?.s ?? 0);
   }
 
-  private drawButton(ctx: Platform['ctx'], r: Rect, icon: string, label: string, fill: string, ad: boolean): void {
+  /** pressed：按下的程度 0～1。按下去按钮缩小、影子变浅，像被按进桌面 */
+  private drawButton(ctx: Platform['ctx'], r: Rect, icon: string, label: string, fill: string, ad: boolean, pressed: number): void {
+    ctx.save();
+    if (pressed > 0) {
+      const k = 1 - (1 - PRESS_SCALE) * pressed;
+      const cx = r.x + r.w / 2;
+      const cy = r.y + r.h / 2;
+      ctx.translate(cx, cy);
+      ctx.scale(k, k);
+      ctx.translate(-cx, -cy);
+    }
+    // 影子只给底色，文字和角标不带影子
     ctx.save();
     ctx.shadowColor = 'rgba(74, 55, 40, 0.22)';
-    ctx.shadowBlur = 6;
-    ctx.shadowOffsetY = 3;
+    ctx.shadowBlur = 6 * (1 - 0.6 * pressed);
+    ctx.shadowOffsetY = 3 * (1 - 0.6 * pressed);
     fillRoundRect(ctx, r.x, r.y, r.w, r.h, r.h / 2, fill);
     ctx.restore();
 
@@ -652,6 +804,7 @@ export class PlayScene implements GestureHandlers {
       ctx.textAlign = 'center';
       ctx.fillText('广告', bx, by + 0.5, 16);
     }
+    ctx.restore();
   }
 }
 

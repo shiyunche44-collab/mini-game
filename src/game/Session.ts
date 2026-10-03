@@ -8,6 +8,8 @@
 // 字段里的 level 都是"这一关的关卡号"；通关事件里的 seconds 是这次打开游戏之后玩这一关花的时间，
 // 接着存档玩的关卡不含之前玩过的部分。
 //
+// 换关：新的一关从右边滑进来，旧的（连同登机牌）向左滑出去，约 0.3 秒；这期间不响应触摸。
+//
 // 存档（key 是 SAVE_KEY）：
 // - 摆放、取出、旋转之后，把进行中的局面存下来，随时退出都能接着玩
 // - 全部装下的那一刻就存"下一关"，不等玩家点"下一站"：登机牌上退出也不会白玩
@@ -26,8 +28,12 @@ import {
   type Progress,
 } from '../core/progress.ts';
 import type { DragEvent, GestureHandlers } from '../engine/input.ts';
+import { easing, Tweens } from '../engine/tween.ts';
 import type { Platform, SharePayload } from '../platform/types.ts';
+import type { GuideKind } from './Guide.ts';
+import { Icons } from './icons.ts';
 import { PlayScene, type ButtonKind } from './PlayScene.ts';
+import { Sfx } from './Sfx.ts';
 import { WinOverlay } from './WinOverlay.ts';
 
 export interface SessionOptions {
@@ -35,12 +41,27 @@ export interface SessionOptions {
   level?: number;
   /** 调试用：开局先用掉几次提示，用来看箱子里摆了东西的样子。全摆完就直接进入过关画面 */
   hints?: number;
+  /** 产物里有图标的物品 id（构建时扫描 assets/icons 得到，入口传进来）。没传就都画 emoji */
+  icons?: readonly string[];
 }
 
 type SessionPlatform = Pick<
   Platform,
-  'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track'
+  'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track' | 'audio' | 'loadImage'
 >;
+
+/** 前几关才有新手引导：之后的关卡玩家早就会了 */
+export const GUIDE_LAST_LEVEL = 3;
+
+/** 换关滑动的时长（毫秒）：太短看不出来，太长玩家等着不耐烦 */
+export const SLIDE_MS = 300;
+
+/** 正在滑走的旧一关。p 是滑动进度 0～1 */
+interface Slide {
+  readonly from: PlayScene;
+  readonly fromWin: WinOverlay | null;
+  p: number;
+}
 
 /** 埋点事件名。后台按这些名字配置，不要随手改 */
 export const EVENTS = {
@@ -66,16 +87,24 @@ export class Session implements GestureHandlers {
   private progress: Progress;
   private scene: PlayScene;
   private win: WinOverlay | null = null;
+  private slide: Slide | null = null;
+  private readonly tweens = new Tweens();
+  private readonly sfx: Sfx;
+  private readonly icons: Icons;
   /** 正在等插屏广告放完：这期间不响应触摸 */
   private busy = false;
   /** 这一关是什么时候开始玩的（platform.now()），算通关用时 */
   private levelStartedAt = 0;
   /** 平台问过了，当前能放"加入侧边栏"的入口。问是异步的，答案回来之前登机牌不画这个按钮 */
   private sidebarUsable = false;
+  /** 这次打开游戏之后，玩家做过哪些引导演示的动作。不存档：重新打开最多多演示一次，换来存档格式不变 */
+  private readonly learned = new Set<GuideKind>();
 
   constructor(platform: SessionPlatform, options: SessionOptions = {}) {
     this.platform = platform;
     this.persist = options.level === undefined;
+    this.sfx = new Sfx(platform);
+    this.icons = new Icons(platform, options.icons ?? []);
     this.progress =
       options.level === undefined
         ? loadProgress(platform.storage.get(SAVE_KEY, null))
@@ -102,14 +131,39 @@ export class Session implements GestureHandlers {
     return this.progress;
   }
 
+  /** 正在换关（旧的一关还在滑走）。这期间不响应触摸 */
+  get sliding(): boolean {
+    return this.slide !== null;
+  }
+
   update(dtMs: number): void {
+    this.tweens.update(dtMs);
+    this.slide?.from.update(dtMs);
+    this.slide?.fromWin?.update(dtMs);
     this.scene.update(dtMs);
     this.win?.update(dtMs);
   }
 
   render(): void {
+    const slide = this.slide;
+    if (!slide) {
+      this.scene.render();
+      this.win?.render();
+      return;
+    }
+    // 两个画面各自画满整个屏幕（背景是同一个渐变），错开一个屏幕宽，接缝处看不出来
+    const { ctx, screen } = this.platform;
+    // 取整到物理像素：平移到小数像素时，两个画面交界处的边缘会抗锯齿出一条细缝
+    const shift = Math.round(screen.width * slide.p * screen.dpr) / screen.dpr;
+    ctx.save();
+    ctx.translate(-shift, 0);
+    slide.from.render();
+    slide.fromWin?.render();
+    ctx.restore();
+    ctx.save();
+    ctx.translate(screen.width - shift, 0);
     this.scene.render();
-    this.win?.render();
+    ctx.restore();
   }
 
   // -------------------------------------------------------------------------
@@ -117,25 +171,25 @@ export class Session implements GestureHandlers {
   // -------------------------------------------------------------------------
 
   tap(x: number, y: number): void {
-    if (this.busy) return;
+    if (this.busy || this.slide) return;
     if (this.win) this.win.tap(x, y);
     else this.scene.tap(x, y);
   }
 
   dragStart(e: DragEvent): void {
-    if (!this.busy && !this.win) this.scene.dragStart(e);
+    if (!this.busy && !this.slide && !this.win) this.scene.dragStart(e);
   }
 
   dragMove(e: DragEvent): void {
-    if (!this.busy && !this.win) this.scene.dragMove(e);
+    if (!this.busy && !this.slide && !this.win) this.scene.dragMove(e);
   }
 
   dragEnd(e: DragEvent): void {
-    if (!this.busy && !this.win) this.scene.dragEnd(e);
+    if (!this.busy && !this.slide && !this.win) this.scene.dragEnd(e);
   }
 
   dragCancel(): void {
-    if (!this.busy && !this.win) this.scene.dragCancel();
+    if (!this.busy && !this.slide && !this.win) this.scene.dragCancel();
   }
 
   // -------------------------------------------------------------------------
@@ -172,11 +226,31 @@ export class Session implements GestureHandlers {
     this.platform.track(EVENTS.levelStart, { level: game.level.n });
     // 每一关开始时录（已经在录就接着录，平台自己处理），通关时停，登机牌上才能分享这一段
     this.platform.recorder?.start();
-    return new PlayScene(this.platform, game, {
-      change: () => this.onChange(),
-      complete: () => this.onComplete(),
-      button: (kind) => this.onButton(kind),
-    });
+    return new PlayScene(
+      this.platform,
+      game,
+      {
+        change: () => this.onChange(),
+        complete: () => this.onComplete(),
+        button: (kind) => this.onButton(kind),
+        taught: (kind) => void this.learned.add(kind),
+        sound: (name) => this.sfx.play(name),
+        muted: () => this.sfx.muted,
+        toggleSound: () => this.sfx.toggle(),
+      },
+      this.guideFor(game),
+      this.icons,
+    );
+  }
+
+  /**
+   * 这一关演示什么：先教旋转（能转的关卡里玩家没转过），再教拖动（没拖过）；都会了就不演示。
+   * 第 1 关不能旋转，所以只演示拖动。
+   */
+  private guideFor(game: Game): GuideKind | null {
+    if (game.level.n > GUIDE_LAST_LEVEL) return null;
+    if (game.level.rotate && !this.learned.has('rotate')) return 'rotate';
+    return this.learned.has('drag') ? null : 'drag';
   }
 
   private save(): void {
@@ -202,6 +276,7 @@ export class Session implements GestureHandlers {
     const sidebar = this.sidebarUsable ? this.platform.sidebar : undefined;
     void recorder?.stop().catch(() => undefined);
     this.win = new WinOverlay(this.platform, layout, { level: cleared, hintsUsed: game.hintsUsed }, {
+      sound: (name) => this.sfx.play(name),
       next: () => void this.advance(cleared.n),
       share: () => {
         this.platform.track(EVENTS.shareClick, { kind: 'friend', level: cleared.n });
@@ -231,7 +306,7 @@ export class Session implements GestureHandlers {
   }
 
   private onButton(kind: ButtonKind): void {
-    if (this.busy) return;
+    if (this.busy || this.slide) return;
     if (kind === 'restart') {
       this.platform.track(EVENTS.levelRestart, { level: this.scene.game.level.n });
       this.scene.restart();
@@ -260,7 +335,23 @@ export class Session implements GestureHandlers {
     this.platform.track(EVENTS.levelSkip, { level: this.scene.game.level.n });
     this.progress = nextLevel(this.progress);
     this.save();
+    this.switchScene();
+  }
+
+  /** 换成当前进度的这一关：新的从右边滑进来，旧的（带着登机牌）滑出去 */
+  private switchScene(): void {
+    this.sfx.play('slide');
+    const slide: Slide = { from: this.scene, fromWin: this.win, p: 0 };
     this.scene = this.makeScene(this.newGame());
+    this.win = null;
+    this.slide = slide;
+    this.tweens.animate(slide, { p: 1 }, {
+      duration: SLIDE_MS,
+      ease: easing.easeOutCubic,
+      onComplete: () => {
+        if (this.slide === slide) this.slide = null;
+      },
+    });
   }
 
   /**
@@ -277,8 +368,7 @@ export class Session implements GestureHandlers {
         this.progress = recordInterstitial(this.progress, this.platform.now());
         this.save();
       }
-      this.scene = this.makeScene(this.newGame());
-      this.win = null;
+      this.switchScene();
     } finally {
       this.busy = false;
     }

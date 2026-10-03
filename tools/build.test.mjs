@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { bundle, TARGETS } from './build.mjs';
+import { bundle, iconIds, TARGETS } from './build.mjs';
 import { LIMIT_BYTES, measure } from './check-size.mjs';
 
 describe('构建', () => {
@@ -37,5 +38,22 @@ describe('包体检查', () => {
     const sizes = await measure();
     assert.ok(Object.keys(sizes).length > 0);
     for (const [name, bytes] of Object.entries(sizes)) assert.ok(bytes > 0 && bytes <= LIMIT_BYTES, `${name} 的产物 ${bytes} 字节`);
+  });
+
+  it('扫描素材目录：只认 .png，文件名去掉扩展名，排好序（保证每次构建一样）；目录不存在就是空', () => {
+    assert.deepEqual(iconIds(join(tmpdir(), '不存在的目录')), []);
+    const dir = mkdtempSync(join(tmpdir(), 'icons-'));
+    try {
+      for (const f of ['teddy.png', 'boot.png', '.gitkeep', 'notes.txt', 'cap.jpg']) writeFileSync(join(dir, f), 'x');
+      assert.deepEqual(iconIds(dir), ['boot', 'teddy']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('扫描结果作为常量编进产物：现在没有素材，是空数组', async () => {
+    const { outputFiles } = await bundle('web', { write: false });
+    const text = outputFiles.find((f) => f.path.endsWith('.js'))?.text ?? '';
+    assert.doesNotMatch(text, /__ICON_IDS__/, '常量应该已经被替换掉了');
   });
 });

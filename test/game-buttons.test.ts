@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { INTERSTITIAL_FIRST_LEVEL, newProgress, SAVE_KEY, type Progress } from '../src/core/progress.ts';
 import type { ButtonKind } from '../src/game/PlayScene.ts';
+import { SLIDE_MS } from '../src/game/Session.ts';
 import { FakePlatform } from './fake-platform.ts';
 import {
   dragIn,
@@ -236,6 +237,7 @@ describe('跳关：看完广告才跳', () => {
     for (let i = 0; i < 3; i++) {
       press(s, 'skip');
       await flush();
+      s.p.advance(SLIDE_MS); // 换关滑动期间不响应触摸
     }
     assert.equal(s.session.current.game.level.n, 4);
     assert.equal(s.p.adLog.length, 3);

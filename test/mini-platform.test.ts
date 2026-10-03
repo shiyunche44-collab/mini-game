@@ -30,6 +30,13 @@ interface FakeApiOptions {
   noShareMenu?: boolean;
   /** 抖音才有的侧边栏：isExist 的答案；'fail' 是接口报错，'throw' 是接口直接抛异常 */
   sidebar?: boolean | 'fail' | 'throw';
+  /**
+   * WebAudio 怎么样：默认正常；'noAutomation' 是老版本，AudioParam 只有 value，没有淡入淡出的方法；
+   * 'missing' 是接口不存在；'createThrows' 是创建上下文时抛异常；'nodeThrows' 是创建振荡器时抛异常；'suspended' 是创建出来是挂起的
+   */
+  audio?: 'noAutomation' | 'missing' | 'createThrows' | 'nodeThrows' | 'suspended';
+  /** 读图怎么样：默认读成功；'error' 是读不到文件（触发 onerror）；'missing' 是接口不存在；'throws' 是创建时抛异常 */
+  image?: 'error' | 'missing' | 'throws';
 }
 
 function fakeApi(o: FakeApiOptions = {}) {
@@ -95,6 +102,80 @@ function fakeApi(o: FakeApiOptions = {}) {
     onStart: () => undefined,
     onStop: (cb: (res: { videoPath: string }) => void) => void recording.stopCbs.push(cb),
     onError: (cb: (err: unknown) => void) => void recording.errorCbs.push(cb),
+  };
+
+  // ---- 读图 ----
+  const imageLog = { paths: [] as string[] };
+  const createImage = () => {
+    if (o.image === 'throws') throw new Error('不支持');
+    const img = {
+      width: 192,
+      height: 192,
+      onload: null as (() => void) | null,
+      onerror: null as (() => void) | null,
+      set src(path: string) {
+        imageLog.paths.push(path);
+        // 和真的一样：设了 src 之后异步回调
+        setImmediate(() => (o.image === 'error' ? img.onerror : img.onload)?.());
+      },
+    };
+    return img;
+  };
+
+  // ---- 音效（WebAudio） ----
+  interface FakeParam {
+    value: number;
+    sets: [number, number][];
+    ramps: [number, number][];
+    setValueAtTime?: (v: number, t: number) => void;
+    linearRampToValueAtTime?: (v: number, t: number) => void;
+  }
+  const param = (): FakeParam => {
+    const par: FakeParam = { value: 0, sets: [], ramps: [] };
+    if (o.audio !== 'noAutomation') {
+      par.setValueAtTime = (v, t) => void par.sets.push([v, t]);
+      par.linearRampToValueAtTime = (v, t) => void par.ramps.push([v, t]);
+    }
+    return par;
+  };
+  const audio = {
+    created: 0,
+    resumed: 0,
+    destination: { id: 'destination' },
+    oscs: [] as { type: string; frequency: FakeParam; started: number[]; stopped: number[]; to: unknown }[],
+    gains: [] as { gain: FakeParam; to: unknown }[],
+  };
+  const audioContext = () => {
+    audio.created++;
+    if (o.audio === 'createThrows') throw new Error('不支持');
+    return {
+      currentTime: 10,
+      destination: audio.destination,
+      state: o.audio === 'suspended' ? 'suspended' : 'running',
+      resume: () => void audio.resumed++,
+      createOscillator: () => {
+        if (o.audio === 'nodeThrows') throw new Error('x');
+        const osc = { type: 'sine', frequency: param(), started: [] as number[], stopped: [] as number[], to: null as unknown };
+        audio.oscs.push(osc);
+        return {
+          get type() {
+            return osc.type;
+          },
+          set type(v: string) {
+            osc.type = v;
+          },
+          frequency: osc.frequency,
+          connect: (node: unknown) => void (osc.to = node),
+          start: (t?: number) => void osc.started.push(t ?? 0),
+          stop: (t?: number) => void osc.stopped.push(t ?? 0),
+        };
+      },
+      createGain: () => {
+        const g = { gain: param(), to: null as unknown };
+        audio.gains.push(g);
+        return { gain: g.gain, connect: (node: unknown) => void (g.to = node) };
+      },
+    };
   };
 
   // ---- 广告 ----
@@ -221,6 +302,8 @@ function fakeApi(o: FakeApiOptions = {}) {
           },
         }
       : {}),
+    ...(o.audio === 'missing' ? {} : { createWebAudioContext: audioContext }),
+    ...(o.image === 'missing' ? {} : { createImage }),
     showModal: (option: {
       title: string;
       content: string;
@@ -232,7 +315,7 @@ function fakeApi(o: FakeApiOptions = {}) {
       else option.success({ confirm: modal.reply === 'confirm' });
     },
   };
-  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode, share, recording, reports, sidebarCalls };
+  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode, share, recording, reports, sidebarCalls, audio, imageLog };
 }
 
 type Fake = ReturnType<typeof fakeApi>;
@@ -639,6 +722,141 @@ for (const { name, reportVia, make } of variants) {
       const { p } = build();
       assert.equal(p.recorder, undefined);
       assert.equal(p.sidebar, undefined);
+    });
+  });
+}
+
+for (const { name, make } of variants) {
+  describe(`${name} 读图`, () => {
+    const build = (o: FakeApiOptions = {}) => {
+      const f = fakeApi(o);
+      return { f, p: make(f, frames().request) };
+    };
+
+    it('读成功：返回平台的图片对象，路径原样交给平台', async () => {
+      const { f, p } = build();
+      const img = await p.loadImage('assets/icons/boot.png');
+      assert.ok(img);
+      assert.equal(img.width, 192);
+      assert.deepEqual(f.imageLog.paths, ['assets/icons/boot.png']);
+    });
+
+    it('读不到文件（onerror）：返回 null，不抛', async () => {
+      const { p } = build({ image: 'error' });
+      assert.equal(await p.loadImage('assets/icons/boot.png'), null);
+    });
+
+    it('平台没有这个接口：返回 null，不抛', async () => {
+      const { p } = build({ image: 'missing' });
+      assert.equal(await p.loadImage('assets/icons/boot.png'), null);
+    });
+
+    it('创建图片对象时抛异常：返回 null，不抛', async () => {
+      const { p } = build({ image: 'throws' });
+      assert.equal(await p.loadImage('assets/icons/boot.png'), null);
+    });
+
+    it('同时读几张：各自返回，互不影响', async () => {
+      const { f, p } = build();
+      const all = await Promise.all(['a', 'b', 'c'].map((n) => p.loadImage(`assets/icons/${n}.png`)));
+      assert.equal(all.filter(Boolean).length, 3);
+      assert.equal(f.imageLog.paths.length, 3);
+    });
+  });
+}
+
+for (const { name, make } of variants) {
+  describe(`${name} 音效`, () => {
+    const build = (o: FakeApiOptions = {}) => {
+      const f = fakeApi(o);
+      return { f, p: make(f, frames().request) };
+    };
+    const TONES = [
+      { wave: 'triangle', freq: 400, start: 0, duration: 100, gain: 0.2 },
+      { wave: 'sine', freq: 600, endFreq: 900, start: 50, duration: 200, gain: 0.1 },
+    ] as const;
+
+    it('启动时不创建音频上下文，第一次播放才创建，并且只创建一次', () => {
+      const { f, p } = build();
+      assert.equal(f.audio.created, 0);
+      p.audio.play(TONES);
+      p.audio.play(TONES);
+      assert.equal(f.audio.created, 1);
+    });
+
+    it('每个音符一个振荡器加一个增益节点，接到输出上，按开始时间和时长启停', () => {
+      const { f, p } = build();
+      p.audio.play(TONES);
+      assert.equal(f.audio.oscs.length, 2);
+      assert.equal(f.audio.gains.length, 2);
+      const [a, b] = f.audio.oscs;
+      assert.equal(a?.type, 'triangle');
+      assert.equal(a?.frequency.value, 400);
+      assert.equal(b?.type, 'sine');
+      // currentTime 是 10 秒：开始 = 10 + start/1000，结束再多留一点点收尾
+      assert.deepEqual(a?.started, [10]);
+      assert.ok(Math.abs((a?.stopped[0] ?? 0) - 10.12) < 1e-9);
+      assert.ok(Math.abs((b?.started[0] ?? 0) - 10.05) < 1e-9);
+      assert.equal(f.audio.gains[0], f.audio.gains.find((g) => g.to === f.audio.destination));
+      assert.ok(f.audio.gains.every((g) => g.to === f.audio.destination));
+      assert.ok(f.audio.oscs.every((o) => o.to !== null && o.to !== f.audio.destination), '振荡器接的是增益节点');
+    });
+
+    it('音量先快速升到目标再线性降到 0；有 endFreq 的音符音高从 freq 滑到 endFreq', () => {
+      const { f, p } = build();
+      p.audio.play(TONES);
+      const g = f.audio.gains[0]?.gain;
+      assert.deepEqual(g?.sets, [[0, 10]]);
+      assert.equal(g?.ramps.length, 2);
+      assert.deepEqual(g?.ramps[0]?.[0], 0.2);
+      assert.deepEqual(g?.ramps[1]?.[0], 0);
+      assert.ok(Math.abs((g?.ramps[1]?.[1] ?? 0) - 10.1) < 1e-9);
+      const slide = f.audio.oscs[1]?.frequency;
+      assert.deepEqual(slide?.sets, [[600, 10.05]]);
+      assert.ok(Math.abs((slide?.ramps[0]?.[1] ?? 0) - 10.25) < 1e-9);
+      assert.equal(slide?.ramps[0]?.[0], 900);
+      assert.deepEqual(f.audio.oscs[0]?.frequency.ramps, [], '没写 endFreq 就不滑');
+    });
+
+    it('老版本没有淡入淡出的方法：照样播，音量和音高直接用固定值', () => {
+      const { f, p } = build({ audio: 'noAutomation' });
+      p.audio.play(TONES);
+      assert.equal(f.audio.oscs.length, 2);
+      assert.equal(f.audio.gains[0]?.gain.value, 0.2);
+      assert.equal(f.audio.oscs[1]?.frequency.value, 600);
+      assert.deepEqual(f.audio.oscs[0]?.started, [10]);
+    });
+
+    it('上下文被挂起（没有用户操作之前、被系统打断）：先恢复再播', () => {
+      const { f, p } = build({ audio: 'suspended' });
+      p.audio.play(TONES);
+      assert.equal(f.audio.resumed, 1);
+      assert.equal(f.audio.oscs.length, 2);
+    });
+
+    it('平台没有这个接口：什么都不发生，不抛异常', () => {
+      const { f, p } = build({ audio: 'missing' });
+      assert.doesNotThrow(() => p.audio.play(TONES));
+      assert.equal(f.audio.created, 0);
+    });
+
+    it('创建上下文时抛异常：不抛，之后也不再反复尝试', () => {
+      const { f, p } = build({ audio: 'createThrows' });
+      assert.doesNotThrow(() => p.audio.play(TONES));
+      assert.doesNotThrow(() => p.audio.play(TONES));
+      assert.equal(f.audio.created, 1);
+    });
+
+    it('创建振荡器时抛异常：不抛，下一次还能继续试', () => {
+      const { p } = build({ audio: 'nodeThrows' });
+      assert.doesNotThrow(() => p.audio.play(TONES));
+      assert.doesNotThrow(() => p.audio.play(TONES));
+    });
+
+    it('空的音符表：什么都不创建', () => {
+      const { f, p } = build();
+      p.audio.play([]);
+      assert.equal(f.audio.oscs.length, 0);
     });
   });
 }

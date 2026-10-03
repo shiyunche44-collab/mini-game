@@ -49,4 +49,15 @@ export const theme = {
   buttonHint: '#ffc94d',
   buttonSkip: '#5ed3c3',
   adBadge: '#e8604c',
+
+  /** 标题栏里静音开关的底色 */
+  soundOn: '#fbe9d0',
+  soundOff: '#e6e0d8',
+
+  /** 提示摆好的物品身上闪的光 */
+  hintGlow: '#fff2a8',
+
+  /** 新手引导：手指下面的触点、点按时荡开的涟漪 */
+  guideDot: 'rgba(74, 55, 40, 0.28)',
+  guideRipple: '#e8604c',
 } as const;

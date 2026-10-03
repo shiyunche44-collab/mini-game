@@ -2,6 +2,7 @@
 // wx 和下一帧函数都由入口传进来，这样没有微信环境也能用假对象测试；本文件里不直接碰全局对象。
 import type {
   Canvas2D,
+  ImageSource,
   Platform,
   PointerHandlers,
   PointerPoint,
@@ -76,6 +77,10 @@ export interface WechatApi {
   onShow(cb: () => void): void;
   onHide(cb: () => void): void;
   vibrateShort(option: { type: 'light' | 'heavy' }): void;
+  /** 合成音效用。老版本没有就没有声音；基础库 2.19.0 起有 */
+  createWebAudioContext?(): unknown;
+  /** 读图用（ADR 0006）。微信里是 wx.createImage */
+  createImage?(): MiniImage;
   createRewardedVideoAd(option: { adUnitId: string }): WxRewardedAd;
   createInterstitialAd(option: { adUnitId: string }): WxInterstitialAd;
   showModal(option: WxModalOption): void;
@@ -159,6 +164,10 @@ export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequeste
 
     ads: createAds(api, adUnits),
 
+    audio: createAudio(api.createWebAudioContext?.bind(api)),
+
+    loadImage: (path) => loadImage(api, path),
+
     share(payload): void {
       try {
         api.shareAppMessage({ title: payload.title, query: payload.query });
@@ -211,6 +220,101 @@ const REWARD_TEXT: Record<RewardedPlacement, string> = {
  * 激励视频只有完整看完才返回 true；中途关闭、加载失败、没有广告都返回 false，不会抛异常。
  * 同一时间只放一个：已经有一个在放时再请求直接返回 false，和 Web 的模拟广告一样。
  */
+/** 小游戏里的图片对象：设 src 开始读，读完回调 onload，读不了回调 onerror */
+interface MiniImage extends ImageSource {
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  src: string;
+}
+
+/** 读图（ADR 0006）：任何失败（接口不存在、抛异常、读不到文件）都返回 null，游戏退回 emoji */
+function loadImage(api: WechatApi, path: string): Promise<ImageSource | null> {
+  return new Promise((resolve) => {
+    try {
+      const img = api.createImage?.();
+      if (!img) return resolve(null);
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = path;
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/** 游戏用到的那一小部分 WebAudio。AudioParam 的自动化方法（淡入淡出、滑音）老版本可能没有，所以都是可选的 */
+interface AudioParamLike {
+  value: number;
+  setValueAtTime?(value: number, time: number): unknown;
+  linearRampToValueAtTime?(value: number, time: number): unknown;
+}
+interface AudioContextLike {
+  readonly currentTime: number;
+  readonly destination: unknown;
+  readonly state?: string;
+  resume?(): unknown;
+  createOscillator(): {
+    type: string;
+    readonly frequency: AudioParamLike;
+    connect(node: unknown): unknown;
+    start(when?: number): void;
+    stop(when?: number): void;
+  };
+  createGain(): { readonly gain: AudioParamLike; connect(node: unknown): unknown };
+}
+
+/**
+ * 音效：用振荡器合成（ADR 0005）。音频上下文第一次播放时才创建，创建失败就永远当作没播。
+ * 每个音符是一个振荡器加一个增益节点：增益先快速升上去再线性降到 0，避免开头结尾"啪"的一声。
+ */
+function createAudio(create: (() => unknown) | undefined): Platform['audio'] {
+  let ctx: AudioContextLike | null | undefined;
+  const get = (): AudioContextLike | null => {
+    if (ctx === undefined) {
+      try {
+        ctx = create ? (create() as AudioContextLike) : null;
+      } catch {
+        ctx = null;
+      }
+    }
+    return ctx ?? null;
+  };
+  return {
+    play(tones): void {
+      const audio = get();
+      if (!audio) return;
+      try {
+        if (audio.state === 'suspended') audio.resume?.();
+        const t0 = audio.currentTime;
+        for (const tone of tones) {
+          const at = t0 + tone.start / 1000;
+          const end = at + tone.duration / 1000;
+          const osc = audio.createOscillator();
+          const amp = audio.createGain();
+          osc.type = tone.wave;
+          osc.frequency.value = tone.freq;
+          if (tone.endFreq !== undefined) {
+            osc.frequency.setValueAtTime?.(tone.freq, at);
+            osc.frequency.linearRampToValueAtTime?.(tone.endFreq, end);
+          }
+          amp.gain.value = tone.gain;
+          if (amp.gain.setValueAtTime && amp.gain.linearRampToValueAtTime) {
+            amp.gain.setValueAtTime(0, at);
+            amp.gain.linearRampToValueAtTime(tone.gain, at + 0.008);
+            amp.gain.linearRampToValueAtTime(0, end);
+          }
+          osc.connect(amp);
+          amp.connect(audio.destination);
+          osc.start(at);
+          osc.stop(end + 0.02);
+        }
+      } catch {
+        // 播不出来只是没声音，不该影响游戏
+      }
+    },
+  };
+}
+
 function createAds(api: WechatApi, adUnits: AdUnits): Platform['ads'] {
   let busy = false;
   let rewardedAd: WxRewardedAd | null = null;

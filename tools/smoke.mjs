@@ -7,7 +7,7 @@
 // 玩法的细节（拖得对不对、存档对不对）单测都测过了，这里只走一条主线，并且只看画布的像素和 localStorage。
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { chromium } from 'playwright';
 import { generateLevel } from '../src/core/levels.ts';
@@ -38,7 +38,10 @@ before(async () => {
     const path = (req.url ?? '/').split('?')[0];
     if (path === '/') res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html);
     else if (path === '/game.js') res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' }).end(js);
-    else res.writeHead(404).end();
+    // 素材（物品图标）：和真实产物一样放在 /assets/ 下。只认 assets/icons 里的 .png，不让路径跳出目录
+    else if (/^\/assets\/icons\/[a-z]+\.png$/.test(path) && existsSync(new URL(`..${path}`, import.meta.url))) {
+      res.writeHead(200, { 'content-type': 'image/png' }).end(readFileSync(new URL(`..${path}`, import.meta.url)));
+    } else res.writeHead(404).end();
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -187,7 +190,8 @@ describe('Web 版冒烟测试', () => {
     await page.waitForSelector('[data-mock-ad]');
     await page.waitForFunction(() => !document.querySelector('[data-action=claim]').disabled, null, { timeout: 6000 });
     await page.locator('[data-action=claim]').click();
-    await page.waitForTimeout(500);
+    // 书飞过去约 220ms，落稳后还要闪约 900ms 的光，光暗下去才是书本来的颜色
+    await page.waitForTimeout(1500);
     assert.ok(isColor(await pixel(page, grid.x + 10, grid.y + 10), BOOK), '领取之后书应该被摆好');
     assert.equal((await save(page)).game.snapshot.hints, 1);
     assert.deepEqual(errors, []);
