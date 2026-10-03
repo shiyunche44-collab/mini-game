@@ -21,6 +21,9 @@ const CARD_MS = 420;
 export const NEXT_LABEL = '下一站';
 export const SHARE_LABEL = '分享给朋友';
 export const VIDEO_LABEL = '分享录屏';
+export const SIDEBAR_LABEL = '加入侧边栏';
+/** 一排放满三个按钮时地方不够，换成短的字 */
+export const SHORT_LABELS = { share: '分享', video: '录屏', sidebar: '侧边栏' } as const;
 
 const CARD_H = 404;
 /** 分享按钮这一行：在条形码下面、"下一站"上面 */
@@ -42,7 +45,11 @@ export interface WinActions {
   share(): void;
   /** 只有平台支持录屏时才有；没有就不画"分享录屏"按钮 */
   shareVideo?: () => void;
+  /** 只有平台支持侧边栏、并且当前能用时才有；没有就不画"加入侧边栏"按钮 */
+  sidebar?: () => void;
 }
+
+type ShareKind = 'share' | 'video' | 'sidebar';
 
 /** 各个动画的进度，都是 0 → 1（有的缓动会短暂超过 1）。tween 改它们，render 读它们。 */
 interface Progress {
@@ -107,10 +114,19 @@ export class WinOverlay {
       this.actions.next();
       return;
     }
-    // 分享可以点很多次，不影响进下一关
-    const { share, video } = this.shareRects();
-    if (contains(share, x, y)) this.actions.share();
-    else if (video && this.actions.shareVideo && contains(video, x, y)) this.actions.shareVideo();
+    // 分享这一排可以点很多次，不影响进下一关
+    const rects = this.shareRects();
+    const kinds = this.shareKinds();
+    kinds.forEach((kind, i) => {
+      const r = rects[i];
+      if (r && contains(r, x, y)) this.press(kind);
+    });
+  }
+
+  private press(kind: ShareKind): void {
+    if (kind === 'share') this.actions.share();
+    else if (kind === 'video') this.actions.shareVideo?.();
+    else this.actions.sidebar?.();
   }
 
   private finish(): void {
@@ -192,8 +208,16 @@ export class WinOverlay {
     return winButtonRect(this.layout, this.platform.screen.height);
   }
 
-  private shareRects(): { share: Rect; video: Rect | null } {
-    return winShareRects(this.layout, this.platform.screen.height, this.actions.shareVideo !== undefined);
+  /** 这一排有哪几个按钮，按从左到右的顺序 */
+  private shareKinds(): ShareKind[] {
+    const kinds: ShareKind[] = ['share'];
+    if (this.actions.shareVideo) kinds.push('video');
+    if (this.actions.sidebar) kinds.push('sidebar');
+    return kinds;
+  }
+
+  private shareRects(): Rect[] {
+    return winShareRects(this.layout, this.platform.screen.height, this.shareKinds().length);
   }
 
   private drawPass(ctx: Platform['ctx']): void {
@@ -278,9 +302,19 @@ export class WinOverlay {
     this.drawBarcode(ctx, c.x + 20, c.y + 236, c.w - 40, 28, level.n);
 
     // 分享：次要按钮，描边不填色，免得抢了"下一站"的风头
-    const { share, video } = this.shareRects();
-    this.drawOutlineButton(ctx, share, '📤', SHARE_LABEL);
-    if (video) this.drawOutlineButton(ctx, video, '🎬', VIDEO_LABEL);
+    const kinds = this.shareKinds();
+    const rects = this.shareRects();
+    const crowded = kinds.length >= 3;
+    const faces: Record<ShareKind, [string, string, string]> = {
+      share: ['📤', SHARE_LABEL, SHORT_LABELS.share],
+      video: ['🎬', VIDEO_LABEL, SHORT_LABELS.video],
+      sidebar: ['📌', SIDEBAR_LABEL, SHORT_LABELS.sidebar],
+    };
+    kinds.forEach((kind, i) => {
+      const r = rects[i];
+      const [emoji, long, short] = faces[kind];
+      if (r) this.drawOutlineButton(ctx, r, emoji, crowded ? short : long, crowded);
+    });
 
     // 下一站
     const b = this.buttonRect();
@@ -303,19 +337,22 @@ export class WinOverlay {
     ctx.restore();
   }
 
-  private drawOutlineButton(ctx: Platform['ctx'], r: Rect, emoji: string, label: string): void {
+  private drawOutlineButton(ctx: Platform['ctx'], r: Rect, emoji: string, label: string, small: boolean): void {
     strokeRoundRect(ctx, r.x, r.y, r.w, r.h, r.h / 2, theme.passBand, 2);
     // 文字和 emoji 分开画，原因同"下一站"
+    const emojiSize = small ? 16 : 18;
+    const gap = small ? 4 : 6;
+    const textFont = `bold ${small ? 14 : 16}px ${FONT}`;
     ctx.fillStyle = theme.passBand;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    ctx.font = `bold 16px ${FONT}`;
+    ctx.font = textFont;
     const labelW = ctx.measureText(label).width;
-    const left = r.x + (r.w - 20 - 6 - labelW) / 2;
-    ctx.font = `18px ${EMOJI_FONT}`;
+    const left = r.x + (r.w - emojiSize - gap - labelW) / 2;
+    ctx.font = `${emojiSize}px ${EMOJI_FONT}`;
     ctx.fillText(emoji, left, r.y + r.h / 2 + 1);
-    ctx.font = `bold 16px ${FONT}`;
-    ctx.fillText(label, left + 20 + 6, r.y + r.h / 2 + 1);
+    ctx.font = textFont;
+    ctx.fillText(label, left + emojiSize + gap, r.y + r.h / 2 + 1);
   }
 
   private drawPlace(
@@ -374,20 +411,15 @@ export function winButtonRect(layout: Layout, screenHeight: number): Rect {
   return { x: c.x + 20, y: c.y + CARD_H - 64, w: c.w - 40, h: 48 };
 }
 
-/** 分享按钮：一排。支持录屏时左右各一个，否则只有"分享给朋友"，占满一排 */
-export function winShareRects(
-  layout: Layout,
-  screenHeight: number,
-  hasVideo: boolean,
-): { share: Rect; video: Rect | null } {
+/** 分享这一排：count 个按钮（1～3 个）平分登机牌的宽度，从左到右 */
+export function winShareRects(layout: Layout, screenHeight: number, count: number): Rect[] {
   const c = winCardRect(layout, screenHeight);
-  const x = c.x + 20;
-  const y = c.y + SHARE_ROW_Y;
-  const w = c.w - 40;
-  if (!hasVideo) return { share: { x, y, w, h: SHARE_ROW_H }, video: null };
-  const half = (w - SHARE_GAP) / 2;
-  return {
-    share: { x, y, w: half, h: SHARE_ROW_H },
-    video: { x: x + half + SHARE_GAP, y, w: half, h: SHARE_ROW_H },
-  };
+  const total = c.w - 40;
+  const w = (total - SHARE_GAP * (count - 1)) / count;
+  return Array.from({ length: count }, (_, i) => ({
+    x: c.x + 20 + i * (w + SHARE_GAP),
+    y: c.y + SHARE_ROW_Y,
+    w,
+    h: SHARE_ROW_H,
+  }));
 }

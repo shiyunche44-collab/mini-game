@@ -28,6 +28,8 @@ interface FakeApiOptions {
   withRecorder?: boolean;
   /** 老版本：分享菜单的接口不存在，调用会抛异常 */
   noShareMenu?: boolean;
+  /** 抖音才有的侧边栏：isExist 的答案；'fail' 是接口报错，'throw' 是接口直接抛异常 */
+  sidebar?: boolean | 'fail' | 'throw';
 }
 
 function fakeApi(o: FakeApiOptions = {}) {
@@ -69,6 +71,12 @@ function fakeApi(o: FakeApiOptions = {}) {
     /** 视频分享的结果 */
     videoResult: 'success' as 'success' | 'fail',
   };
+
+  // ---- 埋点 ----
+  const reports = { sent: [] as { via: string; event: string; data: unknown }[], throws: false };
+
+  // ---- 侧边栏（抖音） ----
+  const sidebarCalls = { opened: 0, checks: 0 };
 
   // ---- 录屏（抖音） ----
   const recording = {
@@ -190,6 +198,29 @@ function fakeApi(o: FakeApiOptions = {}) {
     },
     onShareAppMessage: (cb: () => { title: string }) => void (share.defaultContent = cb),
     ...(o.withRecorder ? { getGameRecorderManager: () => manager } : {}),
+    reportEvent: (event: string, data: unknown) => {
+      if (reports.throws) throw new Error('x');
+      reports.sent.push({ via: 'reportEvent', event, data });
+    },
+    reportAnalytics: (event: string, data: unknown) => {
+      if (reports.throws) throw new Error('x');
+      reports.sent.push({ via: 'reportAnalytics', event, data });
+    },
+    ...(o.sidebar !== undefined
+      ? {
+          checkScene: (option: { scene: string; success(res: { isExist: boolean }): void; fail(): void }) => {
+            sidebarCalls.checks++;
+            if (o.sidebar === 'throw') throw new Error('不支持');
+            if (o.sidebar === 'fail') option.fail();
+            else option.success({ isExist: o.sidebar === true });
+          },
+          navigateToScene: (option: { scene: string; success?(): void; fail?(): void }) => {
+            if (o.sidebar === 'throw') throw new Error('不支持');
+            sidebarCalls.opened++;
+            option.success?.();
+          },
+        }
+      : {}),
     showModal: (option: {
       title: string;
       content: string;
@@ -201,7 +232,7 @@ function fakeApi(o: FakeApiOptions = {}) {
       else option.success({ confirm: modal.reply === 'confirm' });
     },
   };
-  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode, share, recording };
+  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode, share, recording, reports, sidebarCalls };
 }
 
 type Fake = ReturnType<typeof fakeApi>;
@@ -212,15 +243,15 @@ const frames = () => {
 };
 
 type Request = (cb: (t: number) => void) => void;
-const variants: { name: string; make: (f: Fake, request: Request, ads?: AdUnits) => Platform }[] = [
-  { name: 'wechat', make: (f, request, ads) => createWechatPlatform(f.api, request, ads) },
-  { name: 'douyin', make: (f, request, ads) => createDouyinPlatform(f.api, request, ads) },
+const variants: { name: string; reportVia: string; make: (f: Fake, request: Request, ads?: AdUnits) => Platform }[] = [
+  { name: 'wechat', reportVia: 'reportEvent', make: (f, request, ads) => createWechatPlatform(f.api, request, ads) },
+  { name: 'douyin', reportVia: 'reportAnalytics', make: (f, request, ads) => createDouyinPlatform(f.api, request, ads) },
 ];
 
 /** 让已经挂出去的 promise 回调都跑一遍 */
 const settled = () => new Promise<void>((r) => setImmediate(r));
 
-for (const { name, make } of variants) {
+for (const { name, reportVia, make } of variants) {
   describe(`${name} 平台实现`, () => {
     const build = (o: FakeApiOptions = {}, ads?: AdUnits) => {
       const f = fakeApi(o);
@@ -353,6 +384,34 @@ for (const { name, make } of variants) {
         throw new Error('不支持');
       };
       assert.doesNotThrow(() => p.vibrate('light'));
+    });
+
+    describe('埋点', () => {
+      it('事件名和数据交给平台的上报接口（微信 reportEvent，抖音 reportAnalytics）', () => {
+        const { f, p } = build();
+        p.track('level_complete', { level: 3, hints: 0, kind: 'friend' });
+        assert.deepEqual(f.reports.sent, [
+          { via: reportVia, event: 'level_complete', data: { level: 3, hints: 0, kind: 'friend' } },
+        ]);
+      });
+
+      it('平台只收字符串和数字：布尔值转成 1 / 0', () => {
+        const { f, p } = build();
+        p.track('ad_rewarded', { watched: true, other: false });
+        assert.deepEqual(f.reports.sent[0]?.data, { watched: 1, other: 0 });
+      });
+
+      it('没有数据也行，传一个空对象', () => {
+        const { f, p } = build();
+        p.track('app_open');
+        assert.deepEqual(f.reports.sent[0]?.data, {});
+      });
+
+      it('平台抛异常也不影响游戏', () => {
+        const { f, p } = build();
+        f.reports.throws = true;
+        assert.doesNotThrow(() => p.track('x', { a: 1 }));
+      });
     });
 
     describe('分享', () => {
@@ -714,5 +773,37 @@ describe('douyin 录屏', () => {
   it('客户端没有录屏接口就没有 recorder', () => {
     const f = fakeApi();
     assert.equal(createDouyinPlatform(f.api, frames().request).recorder, undefined);
+  });
+});
+
+describe('douyin 侧边栏', () => {
+  const setup = (sidebar: boolean | 'fail' | 'throw') => {
+    const f = fakeApi({ sidebar });
+    const p = createDouyinPlatform(f.api, frames().request);
+    return { f, p, sidebar: p.sidebar };
+  };
+
+  it('平台说入口存在（isExist 为 true）就是可用，说不存在就是不可用', async () => {
+    assert.equal(await setup(true).sidebar?.available(), true);
+    assert.equal(await setup(false).sidebar?.available(), false);
+  });
+
+  it('查询失败、接口直接抛异常，都当作不可用，不抛出来', async () => {
+    assert.equal(await setup('fail').sidebar?.available(), false);
+    assert.equal(await setup('throw').sidebar?.available(), false);
+  });
+
+  it('open 打开侧边栏的引导页；平台抛异常也不影响游戏', () => {
+    const ok = setup(true);
+    ok.sidebar?.open();
+    assert.equal(ok.f.sidebarCalls.opened, 1);
+    const bad = setup('throw');
+    assert.doesNotThrow(() => bad.sidebar?.open());
+  });
+
+  it('客户端没有侧边栏接口就没有 sidebar；微信永远没有', () => {
+    const f = fakeApi();
+    assert.equal(createDouyinPlatform(f.api, frames().request).sidebar, undefined);
+    assert.equal(createWechatPlatform(fakeApi({ sidebar: true }).api, frames().request).sidebar, undefined);
   });
 });

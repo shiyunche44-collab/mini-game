@@ -1,7 +1,15 @@
 // 抖音小游戏平台实现：把 tt 的接口翻译成 Platform 接口，不含游戏逻辑。
 // tt 和下一帧函数都由入口传进来，这样没有抖音环境也能用假对象测试；本文件里不直接碰全局对象。
-// 埋点现在是占位实现（4.4）。
-import type { Canvas2D, Platform, PointerHandlers, PointerPoint, RewardedPlacement, SafeArea, ScreenInfo } from './types.ts';
+import type {
+  Canvas2D,
+  Platform,
+  PointerHandlers,
+  PointerPoint,
+  RewardedPlacement,
+  SafeArea,
+  ScreenInfo,
+  TrackParams,
+} from './types.ts';
 
 interface TtTouch {
   identifier: number;
@@ -92,6 +100,10 @@ export interface DouyinApi {
   getGameRecorderManager?(): TtRecorderManager;
   showShareMenu(option: {  }): void;
   onShareAppMessage(cb: () => { title: string }): void;
+  reportAnalytics(eventName: string, data: Record<string, string | number>): void;
+  /** 侧边栏复访：比较老的客户端没有，没有就不提供 sidebar */
+  checkScene?(option: { scene: 'sidebar'; success(res: { isExist: boolean }): void; fail(): void }): void;
+  navigateToScene?(option: { scene: 'sidebar'; success?(): void; fail?(): void }): void;
 }
 
 /** 注册下一帧回调。小游戏里 requestAnimationFrame 是全局函数，不在 tt 上，所以由入口传进来。 */
@@ -188,9 +200,14 @@ export function createDouyinPlatform(api: DouyinApi, requestFrame: FrameRequeste
     onHide(cb: () => void): void {
       api.onHide(cb);
     },
+    ...(api.checkScene && api.navigateToScene ? { sidebar: createSidebar(api.checkScene.bind(api), api.navigateToScene.bind(api)) } : {}),
     ...(api.getGameRecorderManager ? { recorder: createRecorder(api, api.getGameRecorderManager()) } : {}),
-    track(): void {
-      // 4.4
+    track(event, params): void {
+      try {
+        api.reportAnalytics(event, toReportData(params));
+      } catch {
+        // 埋点失败不影响游戏
+      }
     },
   };
 }
@@ -396,6 +413,43 @@ function createRecorder(api: DouyinApi, manager: TtRecorderManager): NonNullable
         });
       } finally {
         sharing = false;
+      }
+    },
+  };
+}
+
+/**
+ * 平台的埋点只收字符串和数字。布尔值转成 1 / 0，方便在后台按数值筛。
+ */
+function toReportData(params: TrackParams | undefined): Record<string, string | number> {
+  const data: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(params ?? {})) data[key] = typeof value === 'boolean' ? (value ? 1 : 0) : value;
+  return data;
+}
+
+/**
+ * 侧边栏复访：available 问当前客户端能不能放"添加到侧边栏"的入口，open 打开引导页。
+ * 任何失败（接口不存在、没权限、网络）都当作"不可用"，不抛异常。
+ */
+function createSidebar(
+  checkScene: NonNullable<DouyinApi['checkScene']>,
+  navigateToScene: NonNullable<DouyinApi['navigateToScene']>,
+): NonNullable<Platform['sidebar']> {
+  return {
+    available(): Promise<boolean> {
+      return new Promise<boolean>((resolve) => {
+        try {
+          checkScene({ scene: 'sidebar', success: (res) => resolve(res?.isExist === true), fail: () => resolve(false) });
+        } catch {
+          resolve(false);
+        }
+      });
+    },
+    open(): void {
+      try {
+        navigateToScene({ scene: 'sidebar', success: () => undefined, fail: () => undefined });
+      } catch {
+        // 打不开引导页不影响游戏
       }
     },
   };

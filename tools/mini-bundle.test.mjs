@@ -19,6 +19,8 @@ function fakeRuntime(globalName) {
   const logs = [];
   /** 确认框（没填广告位 id 时模拟广告用）：记下弹过什么，按 reply 回应 */
   const modal = { reply: 'confirm', shown: [] };
+  /** 埋点：微信走 reportEvent，抖音走 reportAnalytics */
+  const reports = [];
   const api = {
     createCanvas: () => canvas,
     getSystemInfoSync: () => ({ windowWidth: 390, windowHeight: 844, pixelRatio: 2 }),
@@ -31,6 +33,8 @@ function fakeRuntime(globalName) {
     onShow: () => {},
     onHide: () => {},
     vibrateShort: () => {},
+    reportEvent: (event, data) => reports.push({ event, data }),
+    reportAnalytics: (event, data) => reports.push({ event, data }),
     // 右上角菜单的转发：启动时会注册
     showShareMenu: () => {},
     onShareAppMessage: () => {},
@@ -54,6 +58,7 @@ function fakeRuntime(globalName) {
     touch,
     store,
     modal,
+    reports,
     logs,
     /** 推进 n 帧 */
     step(n = 1) {
@@ -86,6 +91,8 @@ for (const name of ['wechat', 'douyin']) {
       assert.ok(rt.ctx.of('fillRect').length > 0, '应该画出了背景');
       assert.ok(rt.ctx.of('fillText').some((c) => c.args[0] === '第 1 关'));
       assert.equal(rt.pendingFrames, 1, '帧循环还在继续');
+      // 沙箱里创建的对象原型和这里的不是同一个，转成 JSON 再比
+      assert.equal(JSON.stringify(rt.reports), JSON.stringify([{ event: 'level_start', data: { level: 1 } }]), '开局应该上报了 level_start');
     });
 
     it('点一下、拖一下都不会出错，并且会写存档', async () => {

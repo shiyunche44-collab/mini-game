@@ -1,7 +1,15 @@
 // 微信小游戏平台实现：把 wx 的接口翻译成 Platform 接口，不含游戏逻辑。
 // wx 和下一帧函数都由入口传进来，这样没有微信环境也能用假对象测试；本文件里不直接碰全局对象。
-// 埋点现在是占位实现（4.4）。
-import type { Canvas2D, Platform, PointerHandlers, PointerPoint, RewardedPlacement, SafeArea, ScreenInfo } from './types.ts';
+import type {
+  Canvas2D,
+  Platform,
+  PointerHandlers,
+  PointerPoint,
+  RewardedPlacement,
+  SafeArea,
+  ScreenInfo,
+  TrackParams,
+} from './types.ts';
 
 interface WxTouch {
   identifier: number;
@@ -74,6 +82,7 @@ export interface WechatApi {
   shareAppMessage(option: { title: string; query?: string }): void;
   showShareMenu(option: { menus: string[] }): void;
   onShareAppMessage(cb: () => { title: string }): void;
+  reportEvent(eventId: string, data: Record<string, string | number>): void;
 }
 
 /** 注册下一帧回调。小游戏里 requestAnimationFrame 是全局函数，不在 wx 上，所以由入口传进来。 */
@@ -170,8 +179,12 @@ export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequeste
     onHide(cb: () => void): void {
       api.onHide(cb);
     },
-    track(): void {
-      // 4.4
+    track(event, params): void {
+      try {
+        api.reportEvent(event, toReportData(params));
+      } catch {
+        // 埋点失败不影响游戏
+      }
     },
   };
 }
@@ -290,4 +303,13 @@ function enableShareMenu(api: WechatApi): void {
   } catch {
     // 分享菜单打不开不影响游戏
   }
+}
+
+/**
+ * 平台的埋点只收字符串和数字。布尔值转成 1 / 0，方便在后台按数值筛。
+ */
+function toReportData(params: TrackParams | undefined): Record<string, string | number> {
+  const data: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(params ?? {})) data[key] = typeof value === 'boolean' ? (value ? 1 : 0) : value;
+  return data;
 }

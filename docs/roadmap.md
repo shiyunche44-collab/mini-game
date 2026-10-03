@@ -104,6 +104,11 @@
 - 4.3 平台这边：两端启动时打开右上角菜单的"转发"，默认标题是"整理行李箱：把行李都装进箱子，就能出发"（`DEFAULT_SHARE_TITLE`，我定的）；老版本没有这些接口时静默跳过。抖音的录屏（`platform/douyin.ts` 的 `createRecorder`）是个小状态机：空闲、录制中、正在停止。游戏每一关开头 `start`、通关时 `stop`，玩家连点"下一站"时新一关的 `start` 会赶在上一段 `onStop` 之前到，所以"正在停止"时来的 `start` 要等停完再开始；分享时如果还在收尾就等它。单段最长 300 秒（`RECORD_SECONDS`，平台上限），录满自己停下也走同一条路。跳关或者重来不会中断录制，所以一段视频里可能带着前一关的内容（记在 backlog）。
 - 4.3 没有验证的部分：**全部都没有在真机上验证**，这正是 4.3 的验收标准。抖音的 `getGameRecorderManager`、`onStop` 的 `videoPath`、`shareAppMessage({channel: 'video', extra: {videoPath}})` 这几个接口的写法是凭印象写的，没有对照官方文档，抖音这端没有类型库；微信的 `shareAppMessage`、`showShareMenu`、`onShareAppMessage` 对照了类型库，但分享面板长什么样、对方点开后进的是哪一关（我们还不读链接参数，永远进玩家自己的进度）、录屏对低端机卡不卡，只有真机知道。
 - **4.3 还没有标 ✅**：验收是真机验证（步骤见 [devtools.md](devtools.md) 的分享一节）。
+- 4.4 范围（用户选的）：只做侧边栏入口和埋点，**不改 Platform 接口**。不做的：启动场景和分享链接参数的读取（所以统计不到玩家从哪进来）、侧边栏复访奖励。这两样记在 backlog，要做先写 ADR。
+- 4.4 已就绪的部分：事件表见 [analytics.md](analytics.md)，一共 10 个事件，集中在 `game/Session.ts` 的 `EVENTS`。微信走 `wx.reportEvent`，抖音走 `tt.reportAnalytics`，布尔值在平台实现里转 1 / 0，上报失败不影响游戏。抖音的 `sidebar`（`platform/douyin.ts` 的 `createSidebar`）用 `tt.checkScene` 问入口是否存在、`tt.navigateToScene` 打开引导页，任何失败都当作不可用。`Session` 启动时问一次，答案回来之前登机牌不画这个按钮；平台说不可用就永远不画。
+- 4.4 登机牌的变化：分享这一排现在最多三个按钮（分享、录屏、侧边栏），三个时换成短的字（"分享""录屏""侧边栏"）；320×568、375×667 截图确认排得下。
+- 4.4 没有验证的部分：`tt.checkScene` / `tt.navigateToScene` 的参数和返回值（`scene: 'sidebar'`、`res.isExist`）是凭印象写的，没有对照官方文档，抖音这端没有类型库；`isExist` 是否真的表示"这个客户端能放侧边栏入口"也只能真机确认。微信的 `reportEvent` 对照了类型库，但后台没配置的事件收不到，字段个数和长度的限制我没有查。
+- **4.4 还没有标 ✅**：验收是真机验证（步骤见 [devtools.md](devtools.md)）。
 
 ## 阶段 5 以后（到时候再拆细）
 

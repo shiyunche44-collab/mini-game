@@ -227,6 +227,8 @@ export interface FakePlatformOptions {
   safeArea?: Partial<SafeArea>;
   /** 假装是支持录屏的平台（抖音）。默认没有，和微信、Web 一样 */
   recorder?: boolean;
+  /** 假装是支持侧边栏的平台（抖音）。默认没有 */
+  sidebar?: boolean;
 }
 
 export class FakePlatform implements Platform {
@@ -379,6 +381,13 @@ export class FakePlatform implements Platform {
 
   recorder?: NonNullable<Platform['recorder']>;
 
+  // ---- 侧边栏（只有 sidebar 选项打开时才有） ----
+  readonly sidebarLog: ('available' | 'open')[] = [];
+  /** 测试用：available() 的结果，默认可用；设成 'error' 模拟平台出错 */
+  sidebarAvailable: boolean | 'error' = true;
+
+  sidebar?: NonNullable<Platform['sidebar']>;
+
   // ---- 前后台 ----
   private showCbs: (() => void)[] = [];
   private hideCbs: (() => void)[] = [];
@@ -400,6 +409,15 @@ export class FakePlatform implements Platform {
 
   constructor(opts: FakePlatformOptions = {}) {
     this.name = opts.name ?? 'web';
+    if (opts.sidebar) {
+      this.sidebar = {
+        available: () => {
+          this.sidebarLog.push('available');
+          return this.sidebarAvailable === 'error' ? Promise.reject(new Error('x')) : Promise.resolve(this.sidebarAvailable);
+        },
+        open: () => void this.sidebarLog.push('open'),
+      };
+    }
     if (opts.recorder) {
       this.recorder = {
         start: () => void this.recorderLog.push('start'),

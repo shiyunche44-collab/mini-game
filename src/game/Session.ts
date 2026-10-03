@@ -4,6 +4,10 @@
 // 按钮：重来免费；提示和跳关要看完激励视频，看完（rewarded 返回 true）才给，中途关闭、加载失败都不给。
 // 跳关之后不弹插屏：跳关是看完广告换来的，紧接着再弹一个插屏很烦（见 core/progress.ts）。
 //
+// 埋点（platform.track）：事件名和字段是后台要配的，改名等于换一个事件，所以集中在 EVENTS 里。
+// 字段里的 level 都是"这一关的关卡号"；通关事件里的 seconds 是这次打开游戏之后玩这一关花的时间，
+// 接着存档玩的关卡不含之前玩过的部分。
+//
 // 存档（key 是 SAVE_KEY）：
 // - 摆放、取出、旋转之后，把进行中的局面存下来，随时退出都能接着玩
 // - 全部装下的那一刻就存"下一关"，不等玩家点"下一站"：登机牌上退出也不会白玩
@@ -33,7 +37,27 @@ export interface SessionOptions {
   hints?: number;
 }
 
-type SessionPlatform = Pick<Platform, 'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder'>;
+type SessionPlatform = Pick<
+  Platform,
+  'ctx' | 'screen' | 'storage' | 'ads' | 'now' | 'share' | 'recorder' | 'sidebar' | 'track'
+>;
+
+/** 埋点事件名。后台按这些名字配置，不要随手改 */
+export const EVENTS = {
+  levelStart: 'level_start',
+  levelComplete: 'level_complete',
+  levelRestart: 'level_restart',
+  levelSkip: 'level_skip',
+  /** 激励视频放完了：watched 表示玩家有没有看完（提示和跳关都走这个） */
+  adRewarded: 'ad_rewarded',
+  adInterstitial: 'ad_interstitial',
+  /** 点了登机牌上的分享：kind 是 friend（分享给朋友）或 video（分享录屏） */
+  shareClick: 'share_click',
+  shareVideoResult: 'share_video_result',
+  /** 启动时问了一次侧边栏能不能用（只有抖音） */
+  sidebarCheck: 'sidebar_check',
+  sidebarClick: 'sidebar_click',
+} as const;
 
 export class Session implements GestureHandlers {
   private readonly platform: SessionPlatform;
@@ -44,6 +68,10 @@ export class Session implements GestureHandlers {
   private win: WinOverlay | null = null;
   /** 正在等插屏广告放完：这期间不响应触摸 */
   private busy = false;
+  /** 这一关是什么时候开始玩的（platform.now()），算通关用时 */
+  private levelStartedAt = 0;
+  /** 平台问过了，当前能放"加入侧边栏"的入口。问是异步的，答案回来之前登机牌不画这个按钮 */
+  private sidebarUsable = false;
 
   constructor(platform: SessionPlatform, options: SessionOptions = {}) {
     this.platform = platform;
@@ -53,6 +81,7 @@ export class Session implements GestureHandlers {
         ? loadProgress(platform.storage.get(SAVE_KEY, null))
         : { ...newProgress(), level: options.level };
 
+    this.checkSidebar();
     const game = this.newGame();
     for (let i = 0; i < (options.hints ?? 0); i++) game.hint();
     this.scene = this.makeScene(game);
@@ -125,7 +154,22 @@ export class Session implements GestureHandlers {
     return game;
   }
 
+  /** 启动时问一次，不阻塞游戏：出错、没有这个能力都当作不可用 */
+  private checkSidebar(): void {
+    const sidebar = this.platform.sidebar;
+    if (!sidebar) return;
+    sidebar
+      .available()
+      .catch(() => false)
+      .then((usable) => {
+        this.sidebarUsable = usable;
+        this.platform.track(EVENTS.sidebarCheck, { available: usable });
+      });
+  }
+
   private makeScene(game: Game): PlayScene {
+    this.levelStartedAt = this.platform.now();
+    this.platform.track(EVENTS.levelStart, { level: game.level.n });
     // 每一关开始时录（已经在录就接着录，平台自己处理），通关时停，登机牌上才能分享这一段
     this.platform.recorder?.start();
     return new PlayScene(this.platform, game, {
@@ -149,20 +193,49 @@ export class Session implements GestureHandlers {
     const cleared = game.level;
     this.progress = nextLevel(this.progress);
     this.save();
+    this.platform.track(EVENTS.levelComplete, {
+      level: cleared.n,
+      hints: game.hintsUsed,
+      seconds: Math.max(0, Math.round((this.platform.now() - this.levelStartedAt) / 1000)),
+    });
     const recorder = this.platform.recorder;
+    const sidebar = this.sidebarUsable ? this.platform.sidebar : undefined;
     void recorder?.stop().catch(() => undefined);
     this.win = new WinOverlay(this.platform, layout, { level: cleared, hintsUsed: game.hintsUsed }, {
       next: () => void this.advance(cleared.n),
-      share: () => this.platform.share(shareOf(cleared.n)),
+      share: () => {
+        this.platform.track(EVENTS.shareClick, { kind: 'friend', level: cleared.n });
+        this.platform.share(shareOf(cleared.n));
+      },
       // 分享面板是平台自己的界面，不需要 busy；失败（没录到、玩家取消）时什么都不发生，登机牌还在
-      ...(recorder ? { shareVideo: () => void recorder.share().catch(() => false) } : {}),
+      ...(recorder
+        ? {
+            shareVideo: () => {
+              this.platform.track(EVENTS.shareClick, { kind: 'video', level: cleared.n });
+              void recorder
+                .share()
+                .catch(() => false)
+                .then((ok) => this.platform.track(EVENTS.shareVideoResult, { level: cleared.n, ok }));
+            },
+          }
+        : {}),
+      ...(sidebar
+        ? {
+            sidebar: () => {
+              this.platform.track(EVENTS.sidebarClick, { level: cleared.n });
+              sidebar.open();
+            },
+          }
+        : {}),
     });
   }
 
   private onButton(kind: ButtonKind): void {
     if (this.busy) return;
-    if (kind === 'restart') this.scene.restart();
-    else if (kind === 'hint') void this.requestHint();
+    if (kind === 'restart') {
+      this.platform.track(EVENTS.levelRestart, { level: this.scene.game.level.n });
+      this.scene.restart();
+    } else if (kind === 'hint') void this.requestHint();
     else void this.requestSkip();
   }
 
@@ -170,7 +243,9 @@ export class Session implements GestureHandlers {
   private async watchRewarded(placement: 'hint' | 'skip'): Promise<boolean> {
     this.busy = true;
     try {
-      return await this.platform.ads.rewarded(placement);
+      const watched = await this.platform.ads.rewarded(placement);
+      this.platform.track(EVENTS.adRewarded, { placement, watched, level: this.scene.game.level.n });
+      return watched;
     } finally {
       this.busy = false;
     }
@@ -182,6 +257,7 @@ export class Session implements GestureHandlers {
 
   private async requestSkip(): Promise<void> {
     if (!(await this.watchRewarded('skip'))) return;
+    this.platform.track(EVENTS.levelSkip, { level: this.scene.game.level.n });
     this.progress = nextLevel(this.progress);
     this.save();
     this.scene = this.makeScene(this.newGame());
@@ -196,6 +272,7 @@ export class Session implements GestureHandlers {
     try {
       if (shouldShowInterstitial(this.progress, clearedLevel, this.platform.now())) {
         await this.platform.ads.interstitial('between_levels');
+        this.platform.track(EVENTS.adInterstitial, { level: clearedLevel });
         // 放完之后的时间才是"上次弹插屏的时间"
         this.progress = recordInterstitial(this.progress, this.platform.now());
         this.save();
