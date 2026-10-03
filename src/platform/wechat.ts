@@ -1,7 +1,7 @@
 // 微信小游戏平台实现：把 wx 的接口翻译成 Platform 接口，不含游戏逻辑。
 // wx 和下一帧函数都由入口传进来，这样没有微信环境也能用假对象测试；本文件里不直接碰全局对象。
-// 广告、分享、埋点现在是占位实现：广告在 4.2，分享在 4.3，埋点在 4.4。
-import type { Canvas2D, Platform, PointerHandlers, PointerPoint, SafeArea, ScreenInfo } from './types.ts';
+// 分享、埋点现在是占位实现：分享在 4.3，埋点在 4.4。
+import type { Canvas2D, Platform, PointerHandlers, PointerPoint, RewardedPlacement, SafeArea, ScreenInfo } from './types.ts';
 
 interface WxTouch {
   identifier: number;
@@ -24,6 +24,35 @@ interface WxCanvas {
   getContext(type: '2d'): unknown;
 }
 
+/** 激励视频：微信里它是全局唯一的实例，创建一次反复用 */
+interface WxRewardedAd {
+  load(): Promise<unknown>;
+  show(): Promise<unknown>;
+  /** 老版本关闭时不带参数 */
+  onClose(cb: (res?: { isEnded?: boolean }) => void): void;
+  onError(cb: (err: unknown) => void): void;
+}
+interface WxInterstitialAd {
+  show(): Promise<unknown>;
+  destroy(): void;
+  onClose(cb: () => void): void;
+  onError(cb: (err: unknown) => void): void;
+}
+interface WxModalOption {
+  title: string;
+  content: string;
+  confirmText: string;
+  cancelText: string;
+  success(res: { confirm: boolean }): void;
+  fail(): void;
+}
+
+/** 广告位 id。没填（空字符串或没传）的那一种广告退回模拟：激励视频弹确认框，插屏直接跳过。 */
+export interface AdUnits {
+  rewarded?: string;
+  interstitial?: string;
+}
+
 /** 游戏用到的那部分 wx。入口传真正的 wx 进来，类型检查会对照微信的类型库确认这些签名没写错。 */
 export interface WechatApi {
   createCanvas(): WxCanvas;
@@ -39,12 +68,15 @@ export interface WechatApi {
   onShow(cb: () => void): void;
   onHide(cb: () => void): void;
   vibrateShort(option: { type: 'light' | 'heavy' }): void;
+  createRewardedVideoAd(option: { adUnitId: string }): WxRewardedAd;
+  createInterstitialAd(option: { adUnitId: string }): WxInterstitialAd;
+  showModal(option: WxModalOption): void;
 }
 
 /** 注册下一帧回调。小游戏里 requestAnimationFrame 是全局函数，不在 wx 上，所以由入口传进来。 */
 export type FrameRequester = (cb: (t: number) => void) => void;
 
-export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequester): Platform {
+export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequester, adUnits: AdUnits = {}): Platform {
   const info = typeof api.getWindowInfo === 'function' ? api.getWindowInfo() : api.getSystemInfoSync();
   const width = info.windowWidth;
   const height = info.windowHeight;
@@ -111,11 +143,7 @@ export function createWechatPlatform(api: WechatApi, requestFrame: FrameRequeste
       },
     },
 
-    // 占位：4.2 换成真的激励视频和插屏。现在激励视频直接当作看完，开发者工具里可以先试玩提示和跳关。
-    ads: {
-      rewarded: () => Promise.resolve(true),
-      interstitial: () => Promise.resolve(),
-    },
+    ads: createAds(api, adUnits),
 
     share(): void {
       // 4.3
@@ -149,5 +177,95 @@ function safeAreaOf(info: WxWindowInfo): SafeArea {
     left: inset(a.left),
     right: inset(info.windowWidth - a.right),
     bottom: inset(info.windowHeight - a.bottom),
+  };
+}
+
+const REWARD_TEXT: Record<RewardedPlacement, string> = {
+  hint: '获得一次提示',
+  skip: '跳过这一关',
+};
+
+/**
+ * 激励视频只有完整看完才返回 true；中途关闭、加载失败、没有广告都返回 false，不会抛异常。
+ * 同一时间只放一个：已经有一个在放时再请求直接返回 false，和 Web 的模拟广告一样。
+ */
+function createAds(api: WechatApi, adUnits: AdUnits): Platform['ads'] {
+  let busy = false;
+  let rewardedAd: WxRewardedAd | null = null;
+  /** 正在放的那一次激励视频，放完（看完、关闭、出错）时交结果 */
+  let settle: ((watched: boolean) => void) | null = null;
+
+  const showRewarded = (unit: string): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      settle = resolve;
+      if (!rewardedAd) {
+        const created = api.createRewardedVideoAd({ adUnitId: unit });
+        // 事件监听只注册一次，靠 settle 区分是哪一次请求；没有正在放的广告时的事件（比如预加载失败）直接忽略
+        created.onClose((res) => settle?.(res === undefined || res.isEnded === true));
+        created.onError(() => settle?.(false));
+        rewardedAd = created;
+      }
+      const ad = rewardedAd;
+      // 还没加载好时 show 会失败：加载一次再放，再失败就当没有广告
+      ad.show()
+        .catch(() => ad.load().then(() => ad.show()))
+        .catch(() => settle?.(false));
+    });
+
+  // 没填广告位 id 时用系统确认框模拟：点"领取奖励"才给，点"关闭"或者点框外都不给
+  const showMock = (placement: RewardedPlacement): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      api.showModal({
+        title: '模拟广告（广告位还没开通）',
+        content: `${REWARD_TEXT[placement]}。点"领取奖励"才给，点"关闭"拿不到。`,
+        confirmText: '领取奖励',
+        cancelText: '关闭',
+        success: (res) => resolve(res.confirm === true),
+        fail: () => resolve(false),
+      });
+    });
+
+  return {
+    rewarded(placement: RewardedPlacement): Promise<boolean> {
+      if (busy) return Promise.resolve(false);
+      busy = true;
+      const run = adUnits.rewarded ? showRewarded(adUnits.rewarded) : showMock(placement);
+      const finish = (watched: boolean): boolean => {
+        busy = false;
+        settle = null;
+        return watched;
+      };
+      // 创建广告对象这一步在老版本里可能直接抛异常，也当作没有广告
+      return run.then(finish, () => finish(false));
+    },
+
+    interstitial(): Promise<void> {
+      const unit = adUnits.interstitial;
+      if (!unit) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        let ended = false;
+        // 插屏每次新建一个实例，放完就销毁
+        let ad: WxInterstitialAd | null = null;
+        const done = (): void => {
+          if (ended) return;
+          ended = true;
+          try {
+            ad?.destroy();
+          } catch {
+            // 销毁失败不影响游戏
+          }
+          resolve();
+        };
+        try {
+          ad = api.createInterstitialAd({ adUnitId: unit });
+          ad.onClose(done);
+          ad.onError(done);
+          // 平台会限制弹出频率，show 被拒绝就当没有广告
+          ad.show().catch(done);
+        } catch {
+          done();
+        }
+      });
+    },
   };
 }

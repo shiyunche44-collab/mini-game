@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createDouyinPlatform } from '../src/platform/douyin.ts';
 import type { Platform, PointerHandlers, PointerPoint } from '../src/platform/types.ts';
+import type { AdUnits } from '../src/platform/wechat.ts';
 import { createWechatPlatform } from '../src/platform/wechat.ts';
 import { FakeCanvas2D } from './fake-platform.ts';
 
@@ -54,6 +55,28 @@ function fakeApi(o: FakeApiOptions = {}) {
   const shown: (() => void)[] = [];
   const hidden: (() => void)[] = [];
   const calls = { createCanvas: 0, getSystemInfoSync: 0, getWindowInfo: 0, vibrate: [] as unknown[] };
+
+  // ---- 广告 ----
+  /** 确认框怎么回应：点领取 / 点关闭 / 弹不出来 */
+  const modal = { reply: 'confirm' as 'confirm' | 'cancel' | 'fail', shown: [] as { title: string; content: string }[] };
+  /** 激励视频：全局只有一个实例；show 前 failShows 次会失败（模拟还没加载好） */
+  const rewarded = {
+    created: [] as string[],
+    closeCbs: [] as ((res?: { isEnded?: boolean }) => void)[],
+    errorCbs: [] as ((err: unknown) => void)[],
+    failShows: 0,
+    failLoad: false,
+    shows: 0,
+    loads: 0,
+  };
+  const interstitials: {
+    unit: string;
+    destroyed: number;
+    closeCbs: (() => void)[];
+    errorCbs: ((err: unknown) => void)[];
+    showResult: 'pending' | 'reject';
+  }[] = [];
+  const interstitialMode = { showResult: 'pending' as 'pending' | 'reject', createThrows: false };
   const api = {
     createCanvas: () => {
       calls.createCanvas++;
@@ -80,8 +103,54 @@ function fakeApi(o: FakeApiOptions = {}) {
     onShow: (cb: () => void) => shown.push(cb),
     onHide: (cb: () => void) => hidden.push(cb),
     vibrateShort: (option: unknown) => void calls.vibrate.push(option),
+    createRewardedVideoAd: (option: { adUnitId: string }) => {
+      rewarded.created.push(option.adUnitId);
+      return {
+        load: () => {
+          rewarded.loads++;
+          return rewarded.failLoad ? Promise.reject(new Error('load')) : Promise.resolve();
+        },
+        show: () => {
+          rewarded.shows++;
+          if (rewarded.failShows > 0) {
+            rewarded.failShows--;
+            return Promise.reject(new Error('show'));
+          }
+          return Promise.resolve();
+        },
+        onClose: (cb: (res?: { isEnded?: boolean }) => void) => void rewarded.closeCbs.push(cb),
+        onError: (cb: (err: unknown) => void) => void rewarded.errorCbs.push(cb),
+      };
+    },
+    createInterstitialAd: (option: { adUnitId: string }) => {
+      if (interstitialMode.createThrows) throw new Error('不支持');
+      const ad = {
+        unit: option.adUnitId,
+        destroyed: 0,
+        closeCbs: [] as (() => void)[],
+        errorCbs: [] as ((err: unknown) => void)[],
+        showResult: interstitialMode.showResult,
+      };
+      interstitials.push(ad);
+      return {
+        show: () => (ad.showResult === 'reject' ? Promise.reject(new Error('频率限制')) : Promise.resolve()),
+        destroy: () => void ad.destroyed++,
+        onClose: (cb: () => void) => void ad.closeCbs.push(cb),
+        onError: (cb: (err: unknown) => void) => void ad.errorCbs.push(cb),
+      };
+    },
+    showModal: (option: {
+      title: string;
+      content: string;
+      success(res: { confirm: boolean }): void;
+      fail(): void;
+    }) => {
+      modal.shown.push({ title: option.title, content: option.content });
+      if (modal.reply === 'fail') option.fail();
+      else option.success({ confirm: modal.reply === 'confirm' });
+    },
   };
-  return { api, ctx, canvas, touch, store, shown, hidden, calls };
+  return { api, ctx, canvas, touch, store, shown, hidden, calls, modal, rewarded, interstitials, interstitialMode };
 }
 
 type Fake = ReturnType<typeof fakeApi>;
@@ -91,17 +160,21 @@ const frames = () => {
   return { request: (cb: (t: number) => void) => void pending.push(cb), pending };
 };
 
-const variants: { name: string; make: (f: Fake, request: (cb: (t: number) => void) => void) => Platform }[] = [
-  { name: 'wechat', make: (f, request) => createWechatPlatform(f.api, request) },
-  { name: 'douyin', make: (f, request) => createDouyinPlatform(f.api, request) },
+type Request = (cb: (t: number) => void) => void;
+const variants: { name: string; make: (f: Fake, request: Request, ads?: AdUnits) => Platform }[] = [
+  { name: 'wechat', make: (f, request, ads) => createWechatPlatform(f.api, request, ads) },
+  { name: 'douyin', make: (f, request, ads) => createDouyinPlatform(f.api, request, ads) },
 ];
+
+/** 让已经挂出去的 promise 回调都跑一遍 */
+const settled = () => new Promise<void>((r) => setImmediate(r));
 
 for (const { name, make } of variants) {
   describe(`${name} 平台实现`, () => {
-    const build = (o: FakeApiOptions = {}) => {
+    const build = (o: FakeApiOptions = {}, ads?: AdUnits) => {
       const f = fakeApi(o);
       const fr = frames();
-      return { f, fr, p: make(f, fr.request) };
+      return { f, fr, p: make(f, fr.request, ads) };
     };
 
     it('名字对得上', () => {
@@ -231,10 +304,197 @@ for (const { name, make } of variants) {
       assert.doesNotThrow(() => p.vibrate('light'));
     });
 
-    it('广告占位：激励视频当作看完，插屏直接结束（4.2 换成真的）', async () => {
-      const { p } = build();
-      assert.equal(await p.ads.rewarded('hint'), true);
-      await p.ads.interstitial('between_levels');
+    describe('广告：没填广告位 id，退回模拟（确认框）', () => {
+      it('点"领取奖励"才给', async () => {
+        const { f, p } = build();
+        f.modal.reply = 'confirm';
+        assert.equal(await p.ads.rewarded('hint'), true);
+        assert.equal(f.modal.shown.length, 1);
+        assert.match(f.modal.shown[0]?.title ?? '', /模拟广告/);
+        assert.match(f.modal.shown[0]?.content ?? '', /提示/);
+      });
+
+      it('不同的广告位，确认框里写的奖励不一样', async () => {
+        const { f, p } = build();
+        await p.ads.rewarded('skip');
+        assert.match(f.modal.shown[0]?.content ?? '', /跳过/);
+      });
+
+      it('点"关闭"、确认框弹不出来，都不给', async () => {
+        const { f, p } = build();
+        f.modal.reply = 'cancel';
+        assert.equal(await p.ads.rewarded('hint'), false);
+        f.modal.reply = 'fail';
+        assert.equal(await p.ads.rewarded('hint'), false);
+      });
+
+      it('一次放完之后可以再放', async () => {
+        const { p } = build();
+        assert.equal(await p.ads.rewarded('hint'), true);
+        assert.equal(await p.ads.rewarded('hint'), true);
+      });
+
+      it('插屏没有广告位 id 就直接跳过，不弹任何东西', async () => {
+        const { f, p } = build();
+        await p.ads.interstitial('between_levels');
+        assert.equal(f.modal.shown.length, 0);
+        assert.equal(f.interstitials.length, 0);
+      });
+
+      it('同一时间只放一个：已经有一个在放时再请求，直接返回 false', async () => {
+        const { f, p } = build({}, { rewarded: 'ad-1' });
+        const first = p.ads.rewarded('hint');
+        assert.equal(await p.ads.rewarded('skip'), false);
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+        assert.equal(await first, true);
+      });
+    });
+
+    describe('广告：填了广告位 id，用真的激励视频', () => {
+      it('完整看完（isEnded 为 true）才给；创建时带着广告位 id，实例只创建一次', async () => {
+        const { f, p } = build({}, { rewarded: 'ad-rewarded' });
+        const first = p.ads.rewarded('hint');
+        await settled();
+        assert.deepEqual(f.rewarded.created, ['ad-rewarded']);
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+        assert.equal(await first, true);
+
+        const second = p.ads.rewarded('skip');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+        assert.equal(await second, true);
+        assert.equal(f.rewarded.created.length, 1, '全局只有一个激励视频实例');
+        assert.equal(f.rewarded.closeCbs.length, 1, '关闭事件只监听一次');
+      });
+
+      it('中途关闭（isEnded 为 false）不给', async () => {
+        const { f, p } = build({}, { rewarded: 'ad' });
+        const r = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: false });
+        assert.equal(await r, false);
+      });
+
+      it('老版本关闭时不带参数，当作看完；带了参数但没有 isEnded，不给', async () => {
+        const { f, p } = build({}, { rewarded: 'ad' });
+        const old = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb();
+        assert.equal(await old, true);
+
+        const odd = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({});
+        assert.equal(await odd, false);
+      });
+
+      it('平台报错（没有广告可放等）不给，之后还能再请求', async () => {
+        const { f, p } = build({}, { rewarded: 'ad' });
+        const r = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.errorCbs) cb(new Error('no ad'));
+        assert.equal(await r, false);
+
+        const again = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+        assert.equal(await again, true);
+      });
+
+      it('第一次 show 失败（还没加载好）就加载一次再放', async () => {
+        const { f, p } = build({}, { rewarded: 'ad' });
+        f.rewarded.failShows = 1;
+        const r = p.ads.rewarded('hint');
+        await settled();
+        assert.equal(f.rewarded.loads, 1);
+        assert.equal(f.rewarded.shows, 2);
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+        assert.equal(await r, true);
+      });
+
+      it('加载也失败就当没有广告，返回 false，之后还能再请求', async () => {
+        const { f, p } = build({}, { rewarded: 'ad' });
+        f.rewarded.failShows = 2;
+        f.rewarded.failLoad = true;
+        assert.equal(await p.ads.rewarded('hint'), false);
+
+        f.rewarded.failLoad = false;
+        const again = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+        assert.equal(await again, true);
+      });
+
+      it('平台没有这个接口、创建时抛异常，返回 false 而不是抛出来', async () => {
+        const { f, p } = build({}, { rewarded: 'ad' });
+        f.api.createRewardedVideoAd = () => {
+          throw new Error('老版本没有');
+        };
+        assert.equal(await p.ads.rewarded('hint'), false);
+      });
+
+      it('没有正在放的广告时收到的事件（比如预加载出错）直接忽略，不影响下一次', async () => {
+        const { f, p } = build({}, { rewarded: 'ad' });
+        const first = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+        await first;
+        for (const cb of f.rewarded.errorCbs) cb(new Error('late'));
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: true });
+
+        const next = p.ads.rewarded('hint');
+        await settled();
+        for (const cb of f.rewarded.closeCbs) cb({ isEnded: false });
+        assert.equal(await next, false, '上一次留下的事件不能算到这一次头上');
+      });
+    });
+
+    describe('广告：填了广告位 id，用真的插屏', () => {
+      it('放完（关闭）才返回，并销毁实例；每次新建一个实例', async () => {
+        const { f, p } = build({}, { interstitial: 'ad-inter' });
+        let done = false;
+        const r = p.ads.interstitial('between_levels').then(() => (done = true));
+        await settled();
+        assert.equal(done, false, '还没放完不能返回');
+        assert.equal(f.interstitials[0]?.unit, 'ad-inter');
+        for (const cb of f.interstitials[0]?.closeCbs ?? []) cb();
+        await r;
+        assert.equal(f.interstitials[0]?.destroyed, 1);
+
+        const r2 = p.ads.interstitial('between_levels');
+        await settled();
+        for (const cb of f.interstitials[1]?.closeCbs ?? []) cb();
+        await r2;
+        assert.equal(f.interstitials.length, 2);
+      });
+
+      it('show 被拒绝（比如频率限制）、平台报错、创建时抛异常，都直接返回，不卡住游戏', async () => {
+        const rejected = build({}, { interstitial: 'ad' });
+        rejected.f.interstitialMode.showResult = 'reject';
+        await rejected.p.ads.interstitial('between_levels');
+        assert.equal(rejected.f.interstitials[0]?.destroyed, 1);
+
+        const errored = build({}, { interstitial: 'ad' });
+        const r = errored.p.ads.interstitial('between_levels');
+        await settled();
+        for (const cb of errored.f.interstitials[0]?.errorCbs ?? []) cb(new Error('x'));
+        await r;
+
+        const throwing = build({}, { interstitial: 'ad' });
+        throwing.f.interstitialMode.createThrows = true;
+        await throwing.p.ads.interstitial('between_levels');
+      });
+
+      it('关闭和报错都来了，只算一次（不会重复销毁）', async () => {
+        const { f, p } = build({}, { interstitial: 'ad' });
+        const r = p.ads.interstitial('between_levels');
+        await settled();
+        for (const cb of f.interstitials[0]?.closeCbs ?? []) cb();
+        for (const cb of f.interstitials[0]?.errorCbs ?? []) cb(new Error('x'));
+        await r;
+        assert.equal(f.interstitials[0]?.destroyed, 1);
+      });
     });
 
     it('没有抖音才有的可选能力', () => {

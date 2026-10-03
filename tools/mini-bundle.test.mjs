@@ -17,6 +17,8 @@ function fakeRuntime(globalName) {
   const store = new Map();
   const frames = [];
   const logs = [];
+  /** 确认框（没填广告位 id 时模拟广告用）：记下弹过什么，按 reply 回应 */
+  const modal = { reply: 'confirm', shown: [] };
   const api = {
     createCanvas: () => canvas,
     getSystemInfoSync: () => ({ windowWidth: 390, windowHeight: 844, pixelRatio: 2 }),
@@ -29,6 +31,11 @@ function fakeRuntime(globalName) {
     onShow: () => {},
     onHide: () => {},
     vibrateShort: () => {},
+    // 产物里广告位 id 是空的，不会走真广告，所以只给确认框。真广告接口由 test/mini-platform.test.ts 测
+    showModal: (o) => {
+      modal.shown.push(o.title);
+      o.success({ confirm: modal.reply === 'confirm' });
+    },
   };
   const sandbox = {
     [globalName]: api,
@@ -42,6 +49,7 @@ function fakeRuntime(globalName) {
     canvas,
     touch,
     store,
+    modal,
     logs,
     /** 推进 n 帧 */
     step(n = 1) {
@@ -100,6 +108,41 @@ for (const name of ['wechat', 'douyin']) {
       for (const cb of rt.touch.cancel) cb(t(3, 10, 10));
       rt.step(2);
       assert.equal(rt.pendingFrames, 1);
+    });
+
+    it('没填广告位 id：点提示弹出确认框，点"领取奖励"才给，点"关闭"不给', async () => {
+      const { outputFiles } = await bundle(name, { write: false });
+      const js = outputFiles.find((f) => f.path.endsWith('.js'));
+      const rt = fakeRuntime(globalName);
+      vm.runInNewContext(js.text, vm.createContext(rt.sandbox));
+      rt.step(2);
+
+      // 提示按钮的位置：它的文字标签画在按钮里面
+      const label = rt.ctx.of('fillText').find((c) => c.args[0] === '提示');
+      assert.ok(label, '画面上应该有"提示"按钮');
+      const [, x, y] = label.args;
+      const tap = () => {
+        const e = { changedTouches: [{ identifier: 1, clientX: x, clientY: y }] };
+        for (const cb of rt.touch.start) cb(e);
+        for (const cb of rt.touch.end) cb(e);
+      };
+      const flush = async () => {
+        await new Promise((r) => setImmediate(r));
+        rt.step(2);
+      };
+
+      rt.modal.reply = 'cancel';
+      tap();
+      await flush();
+      assert.equal(rt.modal.shown.length, 1);
+      assert.match(rt.modal.shown[0], /模拟广告/);
+      assert.equal(rt.store.has('progress'), false, '没领取就不该给提示，也不该存档');
+
+      rt.modal.reply = 'confirm';
+      tap();
+      await flush();
+      assert.equal(rt.modal.shown.length, 2);
+      assert.equal(rt.store.has('progress'), true, '领取之后给了提示，局面存了档');
     });
 
     it('读到坏存档也能启动', async () => {
